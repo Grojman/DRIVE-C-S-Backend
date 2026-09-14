@@ -1,0 +1,1 @@
+public record Usuario_registro_DTO(string name, string password, string public_key, string private_key);
