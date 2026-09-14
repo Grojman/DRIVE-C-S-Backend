@@ -1,0 +1,55 @@
+NOTACIONES
+f = file
+k = key (clave)
+k (minúscula) = clave privada
+K (mayúscula) = clave pública
+u = usuario
+p = Contraseña
+c = archivo cifrado
+
+Usar SHA-3 (256) para el hasheo de la contraseña, pillar los primeros 128 bits para cifrar y el resto para autenticar el usuario.
+
+E = funcion de encriptado
+D = funcion de desencriptado
+Superíndice: algiritmo utilizado
+Subíidncie: clave utilizada
+
+En el capíutlo de seguridad de la memoria se tiene uqe hablar de manera genérica/ambigüa. Ejemplos de código solo en la sección de desarrollo.
+
+Ni de coña, pero posiblemente usar 2FA
+
+Empezar con RSA 1024, intentar que llegue a 2048
+
+CODIFICAR LA CLAVE EN CLARO EN BASE64 DESDE EL CLIENTE
+
+
+
+DEFINICIÓN DE LA API
+- "/login": GET: Usuario, Contraseña
+- "/login": POST: usuario Contraseña (no todavía)
+- "/files" GET: Usuario, Contraseña, Ruta
+- "/file" GET: Usuario, Contraseña, Ruta
+- "/file" POST: Usuario, Contraseña, Archivo,
+{
+	nombre,
+	id,
+	fecha,
+	...
+	clave,
+	ruta,
+	autorizaciones,
+}
+- "/file" PUT: Usuario, Contraseña, Archivo,
+{
+	nombre,
+	id,
+	fecha,
+	...
+	clave,
+	ruta
+	autorizaciones,
+}
+- "/file" DELETE: Usuario, Contraseña, Ruta
+- "/folder" POST: Usuario, Contraseña, Ruta, Nombre
+- "/folder" DELETE: Usuario, Contraseña, Ruta
+- "/folder" POST: Usuario, Contraseña, Ruta, Nombre

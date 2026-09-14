@@ -1,0 +1,1 @@
+public record UserData(int Id, string Username, string Password, string PrivateKey, string PublicKey);

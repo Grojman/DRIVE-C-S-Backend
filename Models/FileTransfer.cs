@@ -1,0 +1,1 @@
+public record FileTransfer(int Id, string EncriptedKey, string FileData);
