@@ -14,7 +14,7 @@ D = funcion de desencriptado
 Superíndice: algiritmo utilizado
 Subíidncie: clave utilizada
 
-En el capíutlo de seguridad de la memoria se tiene uqe hablar de manera genérica/ambigüa. Ejemplos de código solo en la sección de desarrollo.
+En el capíutlo de seguridad de la memoria se tiene que hablar de manera genérica/ambigüa. Ejemplos de código solo en la sección de desarrollo.
 
 Ni de coña, pero posiblemente usar 2FA
 
@@ -25,11 +25,13 @@ CODIFICAR LA CLAVE EN CLARO EN BASE64 DESDE EL CLIENTE
 
 
 DEFINICIÓN DE LA API
-- "/login": GET: Usuario, Contraseña
-- "/login": POST: usuario Contraseña (no todavía)
-- "/files" GET: Usuario, Contraseña, Ruta
-- "/file" GET: Usuario, Contraseña, Ruta
-- "/file" POST: Usuario, Contraseña, Archivo,
+- "/login": POST: Usuario, Contraseña
+- "/signin": POST: usuario Contraseña (no todavía)
+- "/username/{body}": GET: Usuario 
+- "/logout": POST: userId
+- "/files" GET: userId, Ruta
+- "/file" GET: userId, Ruta
+- "/file" POST: userId, Archivo,
 {
 	nombre,
 	id,
@@ -39,7 +41,7 @@ DEFINICIÓN DE LA API
 	ruta,
 	autorizaciones,
 }
-- "/file" PUT: Usuario, Contraseña, Archivo,
+- "/file" PUT: userId, Archivo,
 {
 	nombre,
 	id,
@@ -49,7 +51,7 @@ DEFINICIÓN DE LA API
 	ruta
 	autorizaciones,
 }
-- "/file" DELETE: Usuario, Contraseña, Ruta
-- "/folder" POST: Usuario, Contraseña, Ruta, Nombre
-- "/folder" DELETE: Usuario, Contraseña, Ruta
-- "/folder" POST: Usuario, Contraseña, Ruta, Nombre
+- "/file" DELETE: userId, Ruta
+- "/folder" POST: userId, Ruta, Nombre
+- "/folder" DELETE: userId, Ruta
+- "/folder" POST: userId, Ruta, Nombre
