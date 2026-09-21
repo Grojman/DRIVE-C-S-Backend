@@ -1,1 +1,1 @@
-public record Usuario_login_DTO(string name, string password);
+public record Usuario_login_DTO(string user, string password);
