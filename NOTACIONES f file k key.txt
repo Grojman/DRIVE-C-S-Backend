@@ -30,7 +30,7 @@ DEFINICIÓN DE LA API
 - "/username/{body}": GET: Usuario 
 - "/logout": POST: userId
 - "/files" GET: userId, Ruta
-- "/file" GET: userId, Ruta
+- "/file" GET: userId, FileId
 - "/file" POST: userId, Archivo,
 {
 	nombre,
