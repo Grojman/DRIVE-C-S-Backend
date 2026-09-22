@@ -61,6 +61,28 @@ public static class UserService
         }
     }
 
+    public static bool postUser(int id, string username, string password, string PrivateKey, string PublicKey)
+    {
+        var query="INSERT INTO Users(ID, USERNAME, PASSWORD, PRIVATEKEY, PUBLICKEY) VALUES( @id, @username, @password, @PrivateKey, @PublicKey)";
+        var args = new Dictionary<string, string>
+        {
+            ["@id"]=id.ToString(),
+            ["@username"]=username,
+            ["@password"]=password,
+            ["@PrivateKey"]=PrivateKey,
+            ["@PublicKey"]=PublicKey
+        };
+        try
+        {
+            DataBaseService.Execute(query, args);
+            return true;
+        }
+        catch(Exception)
+        {
+            return false;
+        }
+    }
+
     public static int getUserId(string username, string password)
     {
         var query = "SELECT Id FROM Users WHERE Username=@username AND Password=@contrasena";

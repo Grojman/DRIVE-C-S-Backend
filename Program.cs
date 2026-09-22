@@ -39,12 +39,21 @@ internal class Program
             return null; //Results.Unauthorized();
         });
 
-        
 
-        /*app.MapPost("/signin", async(HttpRequest request) =>
+
+        app.MapPost("/signin", async(HttpContext request) =>
         {
-            
-        }); */
+            var person = await request.Request.ReadFromJsonAsync<Usuario_registro_DTO>();
+            if(person is not null)
+            {
+                UserService.UserDB? DBuser = 
+
+                string id = UserService.addKey()
+
+                if(UserService.postUser(person.name, person.password, person.private_key, person.public_key))
+            }
+            return Results.Unauthorized();
+        }); 
 
         //app.MapGet("/username/{body}" )
 
@@ -81,8 +90,6 @@ internal class Program
         - "/folder" POST: userId, Ruta, Nombre */
 
         app.Run();
-
-
     }
 
 }   
