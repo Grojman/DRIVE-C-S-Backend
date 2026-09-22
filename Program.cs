@@ -1,9 +1,14 @@
 
+using System.Diagnostics.Eventing.Reader;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.HttpLogging;
 using Microsoft.AspNetCore.Razor.TagHelpers;
 internal class Program
-{
+{   
+
+    public record LoggedInUser(int Id, string Name, string CurrentId, string PrivateKey, string PublicKey);
+
     private static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
@@ -12,20 +17,29 @@ internal class Program
         app.MapGet("/", () => "Hello World!");
 
         //LOGIN GET
-        app.MapPost("/login", async(HttpRequest request)=>
+        app.MapPost("/login", async(HttpContext request) =>
         {
-            var person = await request.ReadFromJsonAsync<Usuario_login_DTO>();
+            var person = await request.Request.ReadFromJsonAsync<Usuario_login_DTO>();
             
             if(person is not null)
             {
                 if (UserService.UserExists(person.user, person.password))
-                {
-                    UserService.addKey() //Results.Ok(new { success = true, message = "Authenticated"});
+                {   
+                    UserService.UserDB? DBuser = UserService.GetUser(person.user, person.password);
+                    if(DBuser is not null)
+                    {
+                        string id = UserService.addKey(DBuser.Id); //Results.Ok(new { success = true, message = "Authenticated"});
+                        LoggedInUser new_user = new (DBuser.Id, person.user, id, DBuser.PrivateKey, DBuser.PublicKey);
+                        return new_user;
+                    }
+                    return null;
                 }
                 
             }
-            return ""; //Results.Unauthorized();
+            return null; //Results.Unauthorized();
         });
+
+        
 
         /*app.MapPost("/signin", async(HttpRequest request) =>
         {
