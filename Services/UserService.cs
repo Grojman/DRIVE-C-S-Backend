@@ -42,10 +42,27 @@ public static class UserService
 
     public static int getUserId(string username, string password)
     {
-        
+        var query = "SELECT Id FROM Users WHERE Username=@username AND Password=@contrasena";
+        var args = new Dictionary<string, string>
+        {
+            ["@username"]=username,
+            ["@contrasena"]=password
+        };
+
+        try
+        {
+            var count = DataBaseService.ReadOne<int>(query, args);
+            return count;
+        }
+        catch (InvalidOperationException)
+        {
+            return -1; //Se trata como "Not Found"
+        }
     }
 
-    static Dictionary<string, string> UsuariosConectados = new();
+    public static int getUserId(string currentId) => UsuariosConectados[currentId];
+
+    static Dictionary<string, int> UsuariosConectados = new();
 
     public static bool IsConnected(string userId)
     {
@@ -60,7 +77,7 @@ public static class UserService
     public static string addKey(int userId)
     {
         Guid key = Guid.NewGuid();
-        UsuariosConectados.Add(key.ToString(), userId.ToString());
+        UsuariosConectados.Add(key.ToString(), userId);
         return key.ToString();
     }
 
