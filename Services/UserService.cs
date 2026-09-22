@@ -3,6 +3,27 @@ using System.Security.Authentication;
 
 public static class UserService
 {
+    public record UserDB(int Id, string Username, string PublicKey, string PrivateKey);
+
+    public static UserDB? GetUser(string name, string passowrd)
+    {
+        var query = "SELECT Id, Username, PublicKey, PrivateKey FROM Users WHERE Username=@username AND Password=@contrasena";
+        var args = new Dictionary<string, string>
+        {
+            ["@username"]=name,
+            ["@contrasena"]=passowrd
+        };
+
+        try
+        {
+            var count = DataBaseService.ReadOne<UserDB>(query, args);
+            return count;
+        }
+        catch (InvalidOperationException)
+        {
+            return null; //Se trata como "Not Found"
+        }
+    }
     public static bool IsUsernameTaken(string username)
     {
         var query = "SELECT COUNT(*) FROM Users WHERE Username = @username";
@@ -82,4 +103,3 @@ public static class UserService
     }
 
 }
-

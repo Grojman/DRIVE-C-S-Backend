@@ -27,6 +27,13 @@ internal class Program
             return ""; //Results.Unauthorized();
         });
 
+        /*app.MapPost("/signin", async(HttpRequest request) =>
+        {
+            
+        }); */
+
+        app.MapGet("/username/{body}" )
+
         /*DEFINICIÓN DE LA API
         - "/login": POST: Usuario, Contraseña
         - "/signin": POST: usuario Contraseña (no todavía)
