@@ -32,7 +32,7 @@ internal class Program
             
         }); */
 
-        app.MapGet("/username/{body}" )
+        //app.MapGet("/username/{body}" )
 
         /*DEFINICIÓN DE LA API
         - "/login": POST: Usuario, Contraseña

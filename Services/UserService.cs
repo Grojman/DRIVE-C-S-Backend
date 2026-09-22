@@ -24,10 +24,6 @@ public static class UserService
             return null; //Se trata como "Not Found"
         }
     }
-<<<<<<< HEAD
-=======
-
->>>>>>> 0cb586ba3584b8e871c724e42e140e5b88f5c251
     public static bool IsUsernameTaken(string username)
     {
         var query = "SELECT COUNT(*) FROM Users WHERE Username = @username";
