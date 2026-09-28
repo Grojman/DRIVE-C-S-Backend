@@ -16,7 +16,7 @@ internal class Program
 
         app.MapGet("/", () => "Hello World!");
 
-        //LOGIN GET
+        //- "/login": POST: Usuario, Contraseña
         app.MapPost("/login", async(HttpContext request) =>
         {
             var person = await request.Request.ReadFromJsonAsync<Usuario_login_DTO>();
@@ -40,31 +40,59 @@ internal class Program
         });
 
 
-
+        //- "/signin": POST: usuario Contraseña pk Pk
         app.MapPost("/signin", async(HttpContext request) =>
         {
             var person = await request.Request.ReadFromJsonAsync<Usuario_registro_DTO>();
             if(person is not null)
             {
-                UserService.UserDB? DBuser = 
-
-                string id = UserService.addKey()
-
                 if(UserService.postUser(person.name, person.password, person.private_key, person.public_key))
+                {
+                    UserService.UserDB? DBuser = UserService.GetUser(person.name, person.password);
+                    if (DBuser != null)
+                    {
+                        string id = UserService.addKey(DBuser.Id);
+                        LoggedInUser new_user = new (DBuser.Id, person.name, id, DBuser.PrivateKey, DBuser.PublicKey);
+                        return Results.Accepted();
+                    }
+                    return Results.BadRequest();
+                }
             }
             return Results.Unauthorized();
-        }); 
+        });
 
-        //app.MapGet("/username/{body}" )
+        //  "/username/{username}": GET: Usuario 
+        app.MapPost("/username/{username}", async(string username) =>
+        {
+            if (UserService.IsUsernameTaken(username))
+            {
 
-        /*DEFINICIÓN DE LA API
-        - "/login": POST: Usuario, Contraseña
-        - "/signin": POST: usuario Contraseña (no todavía)
-        - "/username/{body}": GET: Usuario 
-        - "/logout": POST: userId
-        - "/files" GET: userId, Ruta
-        - "/file" GET: userId, Ruta
-        - "/file" POST: userId, Archivo,
+                return Results.Ok();
+            }
+            return Results.NotFound();
+        });
+
+        //  "/logout": POST: userId
+        app.MapPost("/logout/{id}", async(int id) =>
+        {
+            if(UserService.IsConnected(id.ToString()))
+            {
+                UserService.deleteKey(id.ToString());
+                return Results.Ok();
+            }
+            return Results.BadRequest();
+        });
+
+        //  - "/files" GET: userId, Ruta
+        app.MapGet("/files", async(IConfiguration config ,HttpContext request) =>
+        {
+            var filePath = Path.Combine(config)
+        });
+
+        //  - "/file" GET: userId, Ruta
+        app.MapGet();
+
+        /*- "/file" POST: userId, Archivo,
         {
             nombre,
             id,
@@ -73,8 +101,9 @@ internal class Program
             clave,
             ruta,
             autorizaciones,
-        }
-        - "/file" PUT: userId, Archivo,
+        } */
+
+        /*- "/file" PUT: userId, Archivo,
         {
             nombre,
             id,
@@ -83,11 +112,29 @@ internal class Program
             clave,
             ruta
             autorizaciones,
-        }
-        - "/file" DELETE: userId, Ruta
-        - "/folder" POST: userId, Ruta, Nombre
-        - "/folder" DELETE: userId, Ruta
-        - "/folder" POST: userId, Ruta, Nombre */
+        }*/
+
+        //  - "/file" DELETE: userId, Ruta
+        app.MapDelete("/file")
+
+        //  - "/folder" POST: userId, Ruta, Nombre
+        app.MapPost();
+
+        //  - "/folder" DELETE: userId, Ruta
+        app.MapDelete();
+
+        // - "/folder" POST: userId, Ruta, Nombre
+        app.MapPost() 
+
+        
+
+
+
+        
+
+
+
+        
 
         app.Run();
     }
