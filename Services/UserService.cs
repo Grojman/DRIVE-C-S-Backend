@@ -61,12 +61,11 @@ public static class UserService
         }
     }
 
-    public static bool postUser(int id, string username, string password, string PrivateKey, string PublicKey)
+    public static bool postUser(string username, string password, string PrivateKey, string PublicKey)
     {
-        var query="INSERT INTO Users(ID, USERNAME, PASSWORD, PRIVATEKEY, PUBLICKEY) VALUES( @id, @username, @password, @PrivateKey, @PublicKey)";
+        var query="INSERT INTO Users(USERNAME, PASSWORD, PRIVATEKEY, PUBLICKEY) VALUES(@username, @password, @PrivateKey, @PublicKey)";
         var args = new Dictionary<string, string>
         {
-            ["@id"]=id.ToString(),
             ["@username"]=username,
             ["@password"]=password,
             ["@PrivateKey"]=PrivateKey,
