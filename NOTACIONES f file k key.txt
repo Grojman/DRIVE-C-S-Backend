@@ -22,13 +22,21 @@ Empezar con RSA 1024, intentar que llegue a 2048
 
 CODIFICAR LA CLAVE EN CLARO EN BASE64 DESDE EL CLIENTE
 
+NO USAR ECB PARA EL MODO DE CIFRADO, RECOMENDADO CTR
 
+Lo que me va a pedir la encriptacion:
+
+El IV tiene que ser aleatorio por proceso de cifrado
+
+El nonce no se debe repetir (también debe de ser aleatorio), solo se debe de utilizar una vez.
+
+Padding es el relleno del último bloque en caso de que no llegue al tamaño esperado de bloque.
 
 DEFINICIÓN DE LA API
 - "/login": POST: Usuario, Contraseña
 - "/signin": POST: usuario Contraseña (no todavía)
 - "/username/{body}": GET: Usuario 
-- "/logout": POST: userId
+- "/logout/{}": POST: userId
 - "/files" GET: userId, Ruta
 - "/file" GET: userId, FileId
 - "/file" POST: userId, Archivo,
