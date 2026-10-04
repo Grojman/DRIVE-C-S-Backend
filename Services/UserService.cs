@@ -5,6 +5,20 @@ public static class UserService
 {
     public record UserDB(int Id, string Username, string PublicKey, string PrivateKey);
 
+    private const string CreateUsersTableQuery = @"
+        CREATE TABLE IF NOT EXISTS Users (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Username TEXT NOT NULL UNIQUE,
+            Password TEXT NOT NULL,
+            PrivateKey TEXT NOT NULL,
+            PublicKey TEXT NOT NULL
+        )";
+
+    public static void CreateTable()
+    {
+        DataBaseService.Execute(CreateUsersTableQuery, new Dictionary<string, string>());
+    }
+
     public static UserDB? GetUser(string name, string passowrd)
     {
         var query = "SELECT Id, Username, PublicKey, PrivateKey FROM Users WHERE Username=@username AND Password=@contrasena";

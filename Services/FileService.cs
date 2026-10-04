@@ -22,7 +22,7 @@ public static class FileService
         if(data is not null)
         {
             var fileData = FileSystemService.ReadFileContent(Path.Combine(data.Path, Id.ToString()));
-            return new(Id, data.PrivateKey, fileData);
+            return new(Id, data.PrivateKeys, fileData);
         }
 
         return null;
