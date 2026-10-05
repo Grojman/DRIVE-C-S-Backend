@@ -1,9 +1,13 @@
 
+using System.Collections;
 using System.Diagnostics.Eventing.Reader;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.HttpLogging;
 using Microsoft.AspNetCore.Razor.TagHelpers;
+using System.IO;
+using System.Diagnostics;
+
 internal class Program
 {   
 
@@ -84,9 +88,15 @@ internal class Program
         });
 
         //  - "/files" GET: userId, Ruta (SOLO METADATOS)[Vector]
-        app.MapGet("/files", async(IConfiguration config ,HttpContext request) =>
+        app.MapGet("/files", async(IConfiguration config ,HttpContext request, int FileId, string targetDirectory) =>
         {
-            var filePath = Path.Combine(config["storedPathFiles"])
+            if (FileId> 0)
+            {
+                IEnumerable files = FileDataService.GetFilesInDirectory(FileId);
+                return files;
+            }
+            return null;
+            
         });
 
         //  - "/file" GET: userId, Ruta (EL ARCHIVO)
@@ -128,5 +138,4 @@ internal class Program
 
         app.Run();
     }
-
 }   
