@@ -53,9 +53,9 @@ internal class Program
                     {
                         string id = UserService.addKey(DBuser.Id);
                         LoggedInUser new_user = new (DBuser.Id, person.name, id, DBuser.PrivateKey, DBuser.PublicKey);
-                        return Results.Accepted();
+                        return Results.Accepted("You have succesfully signed in");
                     }
-                    return Results.BadRequest();
+                    return Results.BadRequest("Error at signin in");
                 }
             }
             return Results.Unauthorized();
@@ -67,9 +67,9 @@ internal class Program
             if (UserService.IsUsernameTaken(username))
             {
 
-                return Results.Ok();
+                return Results.Ok("Username ${username} found");
             }
-            return Results.NotFound();
+            return Results.NotFound("Username ${username} not found");
         });
 
         //  "/logout": POST: userId
@@ -78,19 +78,19 @@ internal class Program
             if(UserService.IsConnected(id.ToString()))
             {
                 UserService.deleteKey(id.ToString());
-                return Results.Ok();
+                return Results.Ok("Succesfully logged out");
             }
-            return Results.BadRequest();
+            return Results.BadRequest("Error at logging out.");
         });
 
-        //  - "/files" GET: userId, Ruta
+        //  - "/files" GET: userId, Ruta (SOLO METADATOS)[Vector]
         app.MapGet("/files", async(IConfiguration config ,HttpContext request) =>
         {
-            var filePath = Path.Combine(config)
+            var filePath = Path.Combine(config["storedPathFiles"])
         });
 
-        //  - "/file" GET: userId, Ruta
-        app.MapGet();
+        //  - "/file" GET: userId, Ruta (EL ARCHIVO)
+        app.MapGet("/file", async());
 
         /*- "/file" POST: userId, Archivo,
         {
@@ -124,17 +124,7 @@ internal class Program
         app.MapDelete();
 
         // - "/folder" POST: userId, Ruta, Nombre
-        app.MapPost() 
-
-        
-
-
-
-        
-
-
-
-        
+        app.MapPost();    
 
         app.Run();
     }

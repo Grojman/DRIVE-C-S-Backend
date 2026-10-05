@@ -32,6 +32,9 @@ El nonce no se debe repetir (también debe de ser aleatorio), solo se debe de ut
 
 Padding es el relleno del último bloque en caso de que no llegue al tamaño esperado de bloque.
 
+El password se pide del usuario para conseguir la clave de datos, que servirá para encriptar con AES la clave privada del usuario que ha sido generado junto a la pública con RSA
+
+
 DEFINICIÓN DE LA API
 - "/login": POST: Usuario, Contraseña
 - "/signin": POST: usuario Contraseña (no todavía)
