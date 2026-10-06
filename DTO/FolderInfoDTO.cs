@@ -1,0 +1,1 @@
+public record FolderInfoDTO(string FolderName, string FolderPath);

@@ -1,57 +1,97 @@
-using System.Collections;
-using System.Reflection.Metadata.Ecma335;
-using Microsoft.AspNetCore.Razor.TagHelpers;
-
 public static class FileService
 {
-    public static bool CreateFile(FileInfo info, string fileData)
-    {
-        if(FileDataService.CreateFileInfo(info))
-        {
-            int id = FileDataService.GetFileInfoByNamePath(info.Name, info.Path);
-            var route = Path.Combine(info.Path,  id.ToString());
+    private static string FileRoute(int userId, int fileId) => Path.Combine(userId.ToString(), fileId.ToString());
 
-            return info.FileType == FileType.Directory ? FileSystemService.CreateDirectory(route) : FileSystemService.CreateFile(route, fileData);
+    public static string FullPath(FileInfo folder) => folder.Path == "/" ? "/" + folder.Name : folder.Path.TrimEnd('/') + "/" + folder.Name;
+    public static bool CreateFile(int userId, FileInfo info, string fileData)
+{
+        if (!FileDataService.FolderExists(userId, info.Path) || FileDataService.GetFileInfoByNamePath(userId, info.Name, info.Path) != -1)
+        {
+            return false;
         }
+
+        int id = FileDataService.CreateFileInfo(userId, info);
+        if (id == -1) return false;
+        if (info.FileType == FileType.Directory) return true;
+
+        FileSystemService.CreateDirectory(userId.ToString());
+        if (FileSystemService.CreateFile(FileRoute(userId, id), fileData)) return true;
+
+        FileDataService.DeleteFileInfo(userId, id);
         return false;
     }
 
-    public static FileTransfer? GetFile(int Id)
+    public static FileTransfer? GetFile(int userId, int Id)
     {
-        var data = FileDataService.GetFileById(Id);
-
-        if(data is not null)
+        try
         {
-            var fileData = FileSystemService.ReadFileContent(Path.Combine(data.Path, Id.ToString()));
+            
+        var data = FileDataService.GetFileById(userId, Id);
+
+        if(data is not null && data.FileType == FileType.File)
+        {
+            var route = UserRoute(userId, data.Path, Id.ToString());
+            if(route is null)
+            {
+                return null;
+            }
+
+            var fileData = FileSystemService.ReadFileContent(route);
             return new(Id, data.PrivateKeys, fileData);
+        }
+        } catch (FileNotFoundException)
+        {
+            return null;
         }
 
         return null;
     }
 
-    public static bool UpdateFile(FileInfo info, string fileData)
+    public static bool UpdateFile(int userId, FileInfo info, string fileData)
     {
-        if(FileDataService.UpdateFileInfo(info))
+        var route = UserRoute(userId, info.Path, info.Id.ToString());
+        if(route is null)
         {
-            return info.FileType == FileType.Directory || FileSystemService.ReWriteFile(Path.Combine(info.Path, info.Id.ToString()), fileData);
+            return false;
+        }
+
+        if(FileDataService.UpdateFileInfo(userId, info))
+        {
+            return info.FileType == FileType.Directory || FileSystemService.ReWriteFile(route, fileData);
         }
         return false;
     }
 
-    public static bool DeleteFile(int Id)
+    public static bool DeleteFile(int userId, int Id)
     {
-        var data = FileDataService.GetFileById(Id);
+        var data = FileDataService.GetFileById(userId, Id);
 
         if(data is not null)
         {
-            string path = Path.Combine(data.Path, data.Id.ToString());
+            string? path = UserRoute(userId, data.Path, data.Id.ToString());
+            if(path is null)
+            {
+                return false;
+            }
+
             bool deleted = data.FileType == FileType.File ? FileSystemService.RemoveFile(path) : FileSystemService.RemoveDirectory(path);
 
             if(deleted)
             {
-                return FileDataService.DeleteFileInfo(data.Id);
+                return FileDataService.DeleteFileInfo(userId, data.Id);
             }
         }
         return false;
+    }
+
+    // Devuelve la ruta relativa dentro de la carpeta del usuario, o null si la ruta intenta salir de ella (../, rutas absolutas)
+    private static string? UserRoute(int userId, params string[] parts)
+    {
+        string userRoot = Path.GetFullPath(userId.ToString());
+        string route = Path.Combine([userId.ToString(), .. parts.Select(p => p.TrimStart('/', '\\'))]);
+        string fullRoute = Path.GetFullPath(route);
+
+        bool insideUserRoot = fullRoute == userRoot || fullRoute.StartsWith(userRoot + Path.DirectorySeparatorChar);
+        return insideUserRoot ? route : null;
     }
 }

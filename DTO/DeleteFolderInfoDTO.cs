@@ -1,0 +1,1 @@
+public record DeleteFolderInfoDTO(int FolderId);

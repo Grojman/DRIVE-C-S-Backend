@@ -69,25 +69,12 @@ public static class FileSystemService
 
         try
         {
-            File.WriteAllText(route, newContent);
+            File.WriteAllText(filePath, newContent);
             return true;
         } catch (Exception)
         {
             return false;
         }
-    }
-
-    public static string[] GetFilesAndDirectories(string route)
-    {
-        string directoryPath = Path.Combine(BaseDirectory, route);
-        if (!Directory.Exists(directoryPath))
-        {
-            return Array.Empty<string>();
-        }
-
-        var files = Directory.GetFiles(directoryPath);
-        var directories = Directory.GetDirectories(directoryPath);
-        return [.. files.Concat(directories).Select(path => Path.GetFileNameWithoutExtension(path))];
     }
 
     public static string ReadFileContent(string route)

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Security.Authentication;
 
@@ -30,7 +31,7 @@ public static class UserService
 
         try
         {
-            var count = DataBaseService.ReadOne<UserDB>(query, args);
+            var count = DataBaseService.ReadOne<UserDB>(query, args, r => new UserDB(r.GetInt32(0), r.GetString(1), r.GetString(2), r.GetString(3)));
             return count;
         }
         catch (InvalidOperationException)
@@ -116,25 +117,17 @@ public static class UserService
         }
     }
 
-    public static int getUserId(string currentId) => UsuariosConectados[currentId];
+    static readonly ConcurrentDictionary<string, int> UsuariosConectados = new();
 
-    static Dictionary<string, int> UsuariosConectados = new();
-
-    public static bool IsConnected(string userId)
-    {
-        return UsuariosConectados.ContainsKey(userId);
-    }
-
-    public static void deleteKey(string userId)
-    {
-        UsuariosConectados.Remove(userId);
-    }
+    public static bool TryGetUserId(string sessionId, out int userId) => UsuariosConectados.TryGetValue(sessionId, out userId);
+    public static bool IsConnected(string sessionId) => UsuariosConectados.ContainsKey(sessionId);
+    public static void deleteKey(string sessionId) => UsuariosConectados.TryRemove(sessionId, out _);
 
     public static string addKey(int userId)
     {
-        Guid key = Guid.NewGuid();
-        UsuariosConectados.Add(key.ToString(), userId);
-        return key.ToString();
+        string key = Guid.NewGuid().ToString();
+        UsuariosConectados[key] = userId;
+        return key;
     }
 
 }

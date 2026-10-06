@@ -1,0 +1,1 @@
+public record RenameFolderInfoDTO(int FolderId, string NewName);

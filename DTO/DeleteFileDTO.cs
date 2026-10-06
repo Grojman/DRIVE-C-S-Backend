@@ -1,0 +1,1 @@
+public record DeleteFileDTO(int FileId);
