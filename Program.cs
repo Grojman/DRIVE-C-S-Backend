@@ -107,7 +107,8 @@ internal class Program
         {
             if (FileId> 0)
             {
-                IEnumerable files = FileDataService.GetFilesInDirectory(FileId);
+                var userId = request.GetUserId();
+                IEnumerable files = FileDataService.GetFilesInPath(userId, targetDirectory);
                 return files;
             }
             return null;
