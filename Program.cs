@@ -87,6 +87,7 @@ internal class Program
         //  "/username/{username}": GET: Usuario 
         app.MapGet("/username/{username}", async(string username) =>
         {
+            username = username.Decode();
             return Results.Ok(UserService.IsUsernameTaken(username));
         });
 
@@ -103,15 +104,12 @@ internal class Program
         });
 
         //  - "/files" GET: userId, Ruta (SOLO METADATOS)[Vector]
-        securedGroup.MapGet("/files", async(IConfiguration config ,HttpContext request, int FileId, string targetDirectory) =>
+        securedGroup.MapGet("/files", async(IConfiguration config ,HttpContext request, string targetDirectory) =>
         {
-            if (FileId> 0)
-            {
-                var userId = request.GetUserId();
-                IEnumerable files = FileDataService.GetFilesInPath(userId, targetDirectory);
-                return files;
-            }
-            return null;
+            targetDirectory = targetDirectory.Decode();
+            var userId = request.GetUserId();
+            IEnumerable files = FileDataService.GetFilesInPath(userId, targetDirectory);
+            return files;
             
         });
 

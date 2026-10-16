@@ -14,6 +14,9 @@ public static class DataBaseService
 
         Execute("PRAGMA foreign_keys = ON", new Dictionary<string, string>());
         CheckDatabase();
+        Console.WriteLine("======================");
+        Console.WriteLine("Base de datos abierta");
+        Console.WriteLine("======================");
     }
 
     public static void Stop()

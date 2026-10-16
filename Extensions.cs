@@ -5,6 +5,11 @@ public static class Extensions
 {
     public static int GetUserId(this HttpContext context) => (int)context.Items[AuthMiddleware.USER_ID_KEY]!;
     public static string GetSessionId(this HttpContext context) => (string)context.Items[AuthMiddleware.SESSION_KEY]!;
+
+    public static string Decode(this string value)
+    {
+        return Encoding.UTF8.GetString(Convert.FromBase64String(value));
+    }
 public static async Task<T?> ReadBase64JsonAsync<T>(this HttpRequest request)
 {
     using var reader = new StreamReader(request.Body);
