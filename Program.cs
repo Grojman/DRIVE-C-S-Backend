@@ -87,7 +87,6 @@ internal class Program
         //  "/username/{username}": GET: Usuario 
         app.MapGet("/username/{username}", async(string username) =>
         {
-            username = username.Decode();
             return Results.Ok(UserService.IsUsernameTaken(username));
         });
 
