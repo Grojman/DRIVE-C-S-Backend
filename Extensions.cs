@@ -10,29 +10,27 @@ public static class Extensions
     {
         return Encoding.UTF8.GetString(Convert.FromBase64String(value));
     }
-public static async Task<T?> ReadBase64JsonAsync<T>(this HttpRequest request)
-{
-    using var reader = new StreamReader(request.Body);
-    var encoded = (await reader.ReadToEndAsync()).Trim();
-    try
+    public static async Task<T?> ReadBase64JsonAsync<T>(this HttpRequest request)
     {
-        var json = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
-        // Web options = case-insensitive, so "Data" and "data" both bind
-        return JsonSerializer.Deserialize<T>(json, JsonSerializerOptions.Web);
+        using var reader = new StreamReader(request.Body);
+        var encoded = (await reader.ReadToEndAsync()).Trim();
+        try
+        {
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            return JsonSerializer.Deserialize<T>(json, JsonSerializerOptions.Web);
+        }
+        catch (Exception e) when (e is FormatException or JsonException)
+        {
+            return default;
+        }
     }
-    catch (Exception e) when (e is FormatException or JsonException)
-    {
-        return default;
-    }
-}
 
-// Query parameter: base64(value)
-public static string? ReadBase64Query(this HttpRequest request, string key)
-{
-    var encoded = request.Query[key].ToString();
-    if (string.IsNullOrEmpty(encoded)) return null;
-    try { return Encoding.UTF8.GetString(Convert.FromBase64String(encoded)); }
-    catch (FormatException) { return null; }
-}
+    public static string? ReadBase64Query(this HttpRequest request, string key)
+    {
+        var encoded = request.Query[key].ToString();
+        if (string.IsNullOrEmpty(encoded)) return null;
+        try { return Encoding.UTF8.GetString(Convert.FromBase64String(encoded)); }
+        catch (FormatException) { return null; }
+    }
 
 }
