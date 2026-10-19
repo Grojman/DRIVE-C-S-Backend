@@ -4,7 +4,7 @@ public static class FileService
 
     public static string FullPath(FileInfo folder) => folder.Path == "/" ? "/" + folder.Name : folder.Path.TrimEnd('/') + "/" + folder.Name;
     public static bool CreateFile(int userId, FileInfo info, string fileData)
-{
+    {
         if (!FileDataService.FolderExists(userId, info.Path) || FileDataService.GetFileInfoByNamePath(userId, info.Name, info.Path) != -1)
         {
             return false;
@@ -30,7 +30,7 @@ public static class FileService
 
         if(data is not null && data.FileType == FileType.File)
         {
-            var route = UserRoute(userId, data.Path, Id.ToString());
+            var route = FileRoute(userId, Id);
             if(route is null)
             {
                 return null;
@@ -49,7 +49,7 @@ public static class FileService
 
     public static bool UpdateFile(int userId, FileInfo info, string fileData)
     {
-        var route = UserRoute(userId, info.Path, info.Id.ToString());
+        var route = FileRoute(userId, info.Id);
         if(route is null)
         {
             return false;
@@ -68,7 +68,7 @@ public static class FileService
 
         if(data is not null)
         {
-            string? path = UserRoute(userId, data.Path, data.Id.ToString());
+            string? path = FileRoute(userId, Id);
             if(path is null)
             {
                 return false;
@@ -81,16 +81,5 @@ public static class FileService
             return FileDataService.DeleteFileInfo(userId, data.Id);
         }
         return false;
-    }
-
-    // Devuelve la ruta relativa dentro de la carpeta del usuario, o null si la ruta intenta salir de ella (../, rutas absolutas)
-    private static string? UserRoute(int userId, params string[] parts)
-    {
-        string userRoot = Path.GetFullPath(userId.ToString());
-        string route = Path.Combine([userId.ToString(), .. parts.Select(p => p.TrimStart('/', '\\'))]);
-        string fullRoute = Path.GetFullPath(route);
-
-        bool insideUserRoot = fullRoute == userRoot || fullRoute.StartsWith(userRoot + Path.DirectorySeparatorChar);
-        return insideUserRoot ? route : null;
     }
 }
