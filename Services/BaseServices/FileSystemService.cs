@@ -21,18 +21,6 @@ public static class FileSystemService
             return false;
         }
     }
-    public static bool RemoveDirectory(string route)
-    {
-        var path = Path.Combine(BaseDirectory, route);
-        try
-        {
-            Directory.Delete(path);
-            return true;
-        } catch (Exception)
-        {
-            return false;
-        }
-    }
 
 
     public static bool CreateDirectory(string route)

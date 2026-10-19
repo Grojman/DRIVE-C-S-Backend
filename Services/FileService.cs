@@ -74,12 +74,11 @@ public static class FileService
                 return false;
             }
 
-            bool deleted = data.FileType == FileType.File ? FileSystemService.RemoveFile(path) : FileSystemService.RemoveDirectory(path);
-
-            if(deleted)
+            if (data.FileType == FileType.File && FileSystemService.RemoveFile(path))
             {
                 return FileDataService.DeleteFileInfo(userId, data.Id);
             }
+            return FileDataService.DeleteFileInfo(userId, data.Id);
         }
         return false;
     }
