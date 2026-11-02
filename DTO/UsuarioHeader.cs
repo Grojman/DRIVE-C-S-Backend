@@ -1,0 +1,1 @@
+public record UsuarioHeader(int id, string name, string publicKey);

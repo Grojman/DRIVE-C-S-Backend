@@ -90,6 +90,13 @@ internal class Program
             return Results.Ok(UserService.IsUsernameTaken(username));
         });
 
+        securedGroup.MapGet("/users", async(HttpContext request) =>
+        {
+            var userId = request.GetUserId();
+
+            return UserService.GetUsers(userId).Select(n => new UsuarioHeader(n.Id, n.Username, n.PublicKey));
+        });
+
         //  "/logout": POST: userId
         securedGroup.MapPost("/logout", async(HttpContext request) =>
         {
@@ -103,13 +110,20 @@ internal class Program
         });
 
         //  - "/files" GET: userId, Ruta (SOLO METADATOS)[Vector]
-        securedGroup.MapGet("/files", async(IConfiguration config ,HttpContext request, string targetDirectory) =>
+        var listLocal = async(HttpContext request, string targetDirectory) =>
         {
             targetDirectory = targetDirectory.Decode();
             var userId = request.GetUserId();
             IEnumerable files = FileDataService.GetFilesInPath(userId, targetDirectory);
             return files;
-            
+        };
+        securedGroup.MapGet("/files", listLocal);
+        securedGroup.MapGet("/files/local", listLocal);
+
+        //  - "/files/shared" GET: userId (archivos de otros usuarios que tienen una clave para este usuario)
+        securedGroup.MapGet("/files/shared", async(HttpContext request) =>
+        {
+            return FileDataService.GetSharedFiles(request.GetUserId());
         });
 
         // TODO: THE SERVICE SHOULD GET THE TRUE USER ID IN ORDER TO CREATE FILES UNDER IT
@@ -140,8 +154,8 @@ internal class Program
             var info = await request.Request.ReadBase64JsonAsync<NewFileDTO>();
             if (info is not null)
             {
-                var folderInfo = new FileInfo(-1, info.FileName, info.FilePath, info.Size, info.data.EncriptedKeys, DateTime.Now, DateTime.Now, FileType.File);
-                if (FileService.CreateFile(userId, folderInfo, info.data.FileData))
+                var folderInfo = new FileInfo(-1, info.FileName, info.FilePath, info.Size, info.data.UsersData ?? [], DateTime.Now, DateTime.Now, FileType.File);
+                if (FileService.CreateFile(userId, folderInfo, info.data.FileData, info.data.Keys))
                 {
                     return Results.Ok("File created successfully");
                 }
@@ -160,12 +174,11 @@ internal class Program
                 if(fileInfo is not null)
                 {
                     var newinfo = fileInfo with { 
-                        PrivateKeys = transferInfo.data.EncriptedKeys,
                         Name = transferInfo.FileName,
                         Path = transferInfo.FilePath,
                         Size = transferInfo.Size,
                         ModifiedAt = DateTime.Now};
-                    if (FileService.UpdateFile(userId,newinfo, transferInfo.data.FileData))
+                    if (FileService.UpdateFile(userId,newinfo, transferInfo.data.FileData, transferInfo.data.Keys))
                     {
                         return Results.Ok("File updated successfully");
                     }
@@ -188,13 +201,12 @@ internal class Program
                (data.FileName.Length == 0 || data.FileName.Contains('/') || data.FileName.Contains("..")))
                 return Results.BadRequest("Invalid file name");
 
-            if (data.EncryptedKeys.Length == 0) return Results.BadRequest("At least one key is required");
+            if (data.Keys is not null && data.Keys.Length == 0) return Results.BadRequest("At least one key is required");
 
             var updated = currentFiledata with
             {
                 Name = data.FileName ?? currentFiledata.Name,
                 Path = data.FilePath ?? currentFiledata.Path,
-                PrivateKeys = data.EncryptedKeys ?? currentFiledata.PrivateKeys,
                 ModifiedAt = DateTime.Now
             };
 
@@ -206,7 +218,7 @@ internal class Program
             }
 
             var result = updated.FileType == FileType.File ?
-                         FileDataService.UpdateFileInfo(userId, updated) :
+                         FileDataService.UpdateFileInfo(userId, updated, data.Keys) :
                          FileDataService.MoveFolder(userId, updated, currentFiledata.Path, updated.Path);
 
             return result ? Results.Ok(true) : Results.BadRequest("Error updating file info");

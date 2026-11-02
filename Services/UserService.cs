@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
-using System.Net.Http.Headers;
-using System.Security.Authentication;
+using Microsoft.AspNetCore.StaticFiles;
 
 public static class UserService
 {
@@ -18,6 +17,23 @@ public static class UserService
     public static void CreateTable()
     {
         DataBaseService.Execute(CreateUsersTableQuery, new Dictionary<string, string>());
+    }
+
+    public static IEnumerable<UserDB> GetUsers(int id)
+    {
+        var query = "SELECT Id, Username, PublicKey, PrivateKey FROM Users WHERE Id != @id";
+        var args = new Dictionary<string, string>
+        {
+            ["@id"]=id.ToString(),
+        };
+
+        try
+        {
+            return DataBaseService.ReadMany<UserDB>(query, args);
+        } catch
+        {
+            return [];
+        }
     }
 
     public static UserDB? GetUser(string name, string passowrd)

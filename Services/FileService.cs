@@ -3,14 +3,14 @@ public static class FileService
     private static string FileRoute(int userId, int fileId) => Path.Combine(userId.ToString(), fileId.ToString());
 
     public static string FullPath(FileInfo folder) => folder.Path == "/" ? "/" + folder.Name : folder.Path.TrimEnd('/') + "/" + folder.Name;
-    public static bool CreateFile(int userId, FileInfo info, string fileData)
+    public static bool CreateFile(int userId, FileInfo info, string fileData, UserFileKey[]? keys = null)
     {
         if (!FileDataService.FolderExists(userId, info.Path) || FileDataService.GetFileInfoByNamePath(userId, info.Name, info.Path) != -1)
         {
             return false;
         }
 
-        int id = FileDataService.CreateFileInfo(userId, info);
+        int id = FileDataService.CreateFileInfo(userId, info, keys);
         if (id == -1) return false;
         if (info.FileType == FileType.Directory) return true;
 
@@ -26,18 +26,25 @@ public static class FileService
         try
         {
             
-        var data = FileDataService.GetFileById(userId, Id);
+        var userKey = FileDataService.GetUserKey(userId, Id);
+        var ownerId = FileDataService.GetOwnerId(Id);
+        if(userKey is null || ownerId is null)
+        {
+            return null;
+        }
+
+        var data = FileDataService.GetFileById(ownerId.Value, Id);
 
         if(data is not null && data.FileType == FileType.File)
         {
-            var route = FileRoute(userId, Id);
+            var route = FileRoute(ownerId.Value, Id);
             if(route is null)
             {
                 return null;
             }
 
             var fileData = FileSystemService.ReadFileContent(route);
-            return new(Id, data.PrivateKeys, fileData);
+            return new(Id, data.UsersData, fileData, [new UserFileKey(userId, userKey)]);
         }
         } catch (FileNotFoundException)
         {
@@ -47,7 +54,7 @@ public static class FileService
         return null;
     }
 
-    public static bool UpdateFile(int userId, FileInfo info, string fileData)
+    public static bool UpdateFile(int userId, FileInfo info, string fileData, UserFileKey[]? keys = null)
     {
         var route = FileRoute(userId, info.Id);
         if(route is null)
@@ -55,7 +62,7 @@ public static class FileService
             return false;
         }
 
-        if(FileDataService.UpdateFileInfo(userId, info))
+        if(FileDataService.UpdateFileInfo(userId, info, keys))
         {
             return info.FileType == FileType.Directory || FileSystemService.ReWriteFile(route, fileData);
         }

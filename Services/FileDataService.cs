@@ -18,9 +18,14 @@ public static class FileDataService
         CREATE TABLE IF NOT EXISTS FileKeys (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             FileId INTEGER NOT NULL,
+            UserId INTEGER NOT NULL,
             PrivateKey TEXT NOT NULL,
-            FOREIGN KEY (FileId) REFERENCES FileInfo(Id) ON DELETE CASCADE
+            FOREIGN KEY (FileId) REFERENCES FileInfo(Id) ON DELETE CASCADE,
+            FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
         )";
+    private const string FileKeysColumnsQuery = "SELECT name FROM pragma_table_info('FileKeys')";
+    private const string AddFileKeysUserIdQuery = "ALTER TABLE FileKeys ADD COLUMN UserId INTEGER NOT NULL DEFAULT 0";
+    private const string CreateFileKeysUserIndexQuery = "CREATE INDEX IF NOT EXISTS IX_FileKeys_UserId ON FileKeys (UserId)";
     private const string CreateFileKeysIndexQuery = "CREATE INDEX IF NOT EXISTS IX_FileKeys_FileId ON FileKeys (FileId)";
     private const string CreateFileInfoOwnerIndexQuery = "CREATE INDEX IF NOT EXISTS IX_FileInfo_OwnerId ON FileInfo (OwnerId)";
 
@@ -30,9 +35,12 @@ public static class FileDataService
     private const string CreateFileQuery = "INSERT INTO FileInfo (OwnerId, Name, Path, Size, CreatedAt, ModifiedAt, FileType) VALUES (@OwnerId, @Name, @Path, @Size, @CreatedAt, @ModifiedAt, @FileType)";
     private const string LastInsertIdQuery = "SELECT last_insert_rowid()";
 
-    private const string ReadKeysQuery = "SELECT PrivateKey FROM FileKeys WHERE FileId = @FileId ORDER BY Id";
+    private const string ReadUsersDataQuery = "SELECT u.Id, u.Username, u.PublicKey FROM FileKeys k JOIN Users u ON u.Id = k.UserId WHERE k.FileId = @FileId ORDER BY k.Id";
+    private const string ReadUserKeyQuery = "SELECT PrivateKey FROM FileKeys WHERE FileId = @FileId AND UserId = @UserId";
+    private const string ReadOwnerQuery = "SELECT OwnerId FROM FileInfo WHERE Id = @Id";
+    private const string ListSharedQuery = "SELECT f.Id, f.Name, f.Path, f.Size, f.CreatedAt, f.ModifiedAt, f.FileType FROM FileInfo f JOIN FileKeys k ON k.FileId = f.Id WHERE k.UserId = @UserId AND f.OwnerId != @UserId ORDER BY f.Name";
     private const string DeleteKeysQuery = "DELETE FROM FileKeys WHERE FileId = @FileId";
-    private const string CreateKeyQuery = "INSERT INTO FileKeys (FileId, PrivateKey) VALUES (@FileId, @PrivateKey)";
+    private const string CreateKeyQuery = "INSERT INTO FileKeys (FileId, UserId, PrivateKey) VALUES (@FileId, @UserId, @PrivateKey)";
 
     private const string DateFormat = "yyyy-MM-dd HH:mm:ss";
 
@@ -49,8 +57,42 @@ public static class FileDataService
         var args = new Dictionary<string, string> { { "@OwnerId", userId.ToString() }, { "@Path", path } };
         return DataBaseService.ReadMany(ListPathQuery, args, MapFileInfo)
             .ToList()
-            .Select(f => f with { PrivateKeys = GetPrivateKeys(f.Id) });
+            .Select(f => f with { UsersData = GetUsersData(f.Id) });
     }
+
+    public static IEnumerable<FileInfo> GetSharedFiles(int userId)
+    {
+        var args = new Dictionary<string, string> { { "@UserId", userId.ToString() } };
+        return DataBaseService.ReadMany(ListSharedQuery, args, MapFileInfo)
+            .ToList()
+            .Select(f => f with { UsersData = GetUsersData(f.Id) });
+    }
+
+    public static int? GetOwnerId(int fileId)
+    {
+        try
+        {
+            return DataBaseService.ReadOne<int>(ReadOwnerQuery, new Dictionary<string, string> { { "@Id", fileId.ToString() } });
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    public static string? GetUserKey(int userId, int fileId)
+    {
+        var args = new Dictionary<string, string> { { "@FileId", fileId.ToString() }, { "@UserId", userId.ToString() } };
+        try
+        {
+            return DataBaseService.ReadOne<string>(ReadUserKeyQuery, args);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
 
     public static bool FolderExists(int userId, string path)
     {
@@ -99,12 +141,17 @@ public static class FileDataService
         var noArgs = new Dictionary<string, string>();
         DataBaseService.Execute(CreateFileInfoTableQuery, noArgs);
         DataBaseService.Execute(CreateFileKeysTableQuery, noArgs);
+        if (!DataBaseService.ReadMany<string>(FileKeysColumnsQuery, noArgs).Contains("UserId"))
+        {
+            DataBaseService.Execute(AddFileKeysUserIdQuery, noArgs);
+        }
         DataBaseService.Execute(CreateFileKeysIndexQuery, noArgs);
+        DataBaseService.Execute(CreateFileKeysUserIndexQuery, noArgs);
         DataBaseService.Execute(CreateFileInfoOwnerIndexQuery, noArgs);
     }
 
 
-    public static int CreateFileInfo(int userId, FileInfo fileInfo)
+    public static int CreateFileInfo(int userId, FileInfo fileInfo, UserFileKey[]? keys)
     {
         var args = BuildFileArgs(userId, fileInfo);
         int fileId = -1;
@@ -113,7 +160,7 @@ public static class FileDataService
         {
             DataBaseService.Execute(CreateFileQuery, args);
             fileId = DataBaseService.ReadOne<int>(LastInsertIdQuery, []);
-            ReplacePrivateKeys(fileId, fileInfo.PrivateKeys);
+            ReplaceKeys(fileId, keys);
         });
 
         return ok ? fileId : -1;
@@ -131,7 +178,7 @@ public static class FileDataService
         try
         {
             FileInfo fileInfo = DataBaseService.ReadOne(ReadFileQuery, args, MapFileInfo);
-            return fileInfo with { PrivateKeys = GetPrivateKeys(fileId) };
+            return fileInfo with { UsersData = GetUsersData(fileId) };
         }
         catch (InvalidOperationException)
         {
@@ -139,10 +186,10 @@ public static class FileDataService
         }
     }
 
-    public static string[] GetPrivateKeys(int fileId)
+    public static UsuarioHeader[] GetUsersData(int fileId)
     {
         var args = new Dictionary<string, string> { { "@FileId", fileId.ToString() } };
-        return DataBaseService.ReadMany(ReadKeysQuery, args, reader => reader.GetString(0)).ToArray();
+        return DataBaseService.ReadMany(ReadUsersDataQuery, args, reader => new UsuarioHeader(reader.GetInt32(0), reader.GetString(1), reader.GetString(2))).ToArray();
     }
 
     public static bool DeleteFileInfo(int userId, int fileId)
@@ -167,7 +214,7 @@ public static class FileDataService
         });
     }
 
-    public static bool UpdateFileInfo(int userId, FileInfo fileInfo)
+    public static bool UpdateFileInfo(int userId, FileInfo fileInfo, UserFileKey[]? keys = null)
     {
         // Sin esta comprobacion se podrian reemplazar las claves de un archivo ajeno
         if (GetFileById(userId, fileInfo.Id) is null)
@@ -181,7 +228,7 @@ public static class FileDataService
         return RunInTransaction(() =>
         {
             DataBaseService.Execute(UpdateFileQuery, args);
-            ReplacePrivateKeys(fileInfo.Id, fileInfo.PrivateKeys);
+            if (keys is not null) ReplaceKeys(fileInfo.Id, keys);
         });
     }
 
@@ -205,16 +252,17 @@ public static class FileDataService
         }
     }
 
-    private static void ReplacePrivateKeys(int fileId, string[]? privateKeys)
+    private static void ReplaceKeys(int fileId, UserFileKey[]? keys)
     {
         DataBaseService.Execute(DeleteKeysQuery, new Dictionary<string, string> { { "@FileId", fileId.ToString() } });
 
-        foreach (var privateKey in privateKeys ?? Array.Empty<string>())
+        foreach (var key in keys ?? Array.Empty<UserFileKey>())
         {
             DataBaseService.Execute(CreateKeyQuery, new Dictionary<string, string>
             {
                 { "@FileId", fileId.ToString() },
-                { "@PrivateKey", privateKey }
+                { "@UserId", key.UserId.ToString() },
+                { "@PrivateKey", key.Key }
             });
         }
     }
@@ -240,7 +288,7 @@ public static class FileDataService
             reader.GetString(1),
             reader.GetString(2),
             reader.GetInt64(3),
-            Array.Empty<string>(),
+            Array.Empty<UsuarioHeader>(),
             DateTime.Parse(reader.GetString(4)),
             DateTime.Parse(reader.GetString(5)),
             Enum.Parse<FileType>(reader.GetString(6))

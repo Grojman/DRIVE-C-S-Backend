@@ -1,1 +1,1 @@
-public record UpdateFileInfoDTO(int FileId, string FileName, string FilePath, string[] EncryptedKeys);
+public record UpdateFileInfoDTO(int FileId, string FileName, string FilePath, UserFileKey[]? Keys);
