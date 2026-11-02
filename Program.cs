@@ -126,6 +126,37 @@ internal class Program
             return FileDataService.GetSharedFiles(request.GetUserId());
         });
 
+        securedGroup.MapGet("/file/key", async(HttpContext request) =>
+        {
+           var userId = request.GetUserId();
+           var fileId = request.Request.Query["FileId"].ToString();
+           if (int.TryParse(request.Request.ReadBase64Query("FileId"), out int id))
+            {
+                var key = FileDataService.GetUserKey(userId, id);
+                if (key is not null)
+                {
+                    return Results.Ok(key);
+                }
+            }
+            return Results.NotFound("File not found");    
+
+        });
+
+        securedGroup.MapGet("/file/keys", async(HttpContext request) =>
+        {
+            var userId = request.GetUserId();
+            var fileId = request.Request.Query["FileId"].ToString();
+            if (int.TryParse(request.Request.ReadBase64Query("FileId"), out int id))
+            {
+                var keys = FileDataService.GetUserKeys(id);
+                if (keys is not null)
+                {
+                    return Results.Ok(keys);
+                }
+            }
+            return Results.NotFound("File not found");
+        });
+
         // TODO: THE SERVICE SHOULD GET THE TRUE USER ID IN ORDER TO CREATE FILES UNDER IT
 
         //  - "/file" GET: userId, Ruta (EL ARCHIVO)
@@ -178,7 +209,7 @@ internal class Program
                         Path = transferInfo.FilePath,
                         Size = transferInfo.Size,
                         ModifiedAt = DateTime.Now};
-                    if (FileService.UpdateFile(userId,newinfo, transferInfo.data.FileData, transferInfo.data.Keys))
+                    if (FileService.UpdateFile(userId,newinfo, transferInfo.data.FileData))
                     {
                         return Results.Ok("File updated successfully");
                     }

@@ -37,6 +37,7 @@ public static class FileDataService
 
     private const string ReadUsersDataQuery = "SELECT u.Id, u.Username, u.PublicKey FROM FileKeys k JOIN Users u ON u.Id = k.UserId WHERE k.FileId = @FileId ORDER BY k.Id";
     private const string ReadUserKeyQuery = "SELECT PrivateKey FROM FileKeys WHERE FileId = @FileId AND UserId = @UserId";
+    private const string ReadUserKeysQuery = "SELECT PrivateKey as Key, UserId FROM FileKeys WHERE FileId = @FileId";
     private const string ReadOwnerQuery = "SELECT OwnerId FROM FileInfo WHERE Id = @Id";
     private const string ListSharedQuery = "SELECT f.Id, f.Name, f.Path, f.Size, f.CreatedAt, f.ModifiedAt, f.FileType FROM FileInfo f JOIN FileKeys k ON k.FileId = f.Id WHERE k.UserId = @UserId AND f.OwnerId != @UserId ORDER BY f.Name";
     private const string DeleteKeysQuery = "DELETE FROM FileKeys WHERE FileId = @FileId";
@@ -90,6 +91,18 @@ public static class FileDataService
         catch (InvalidOperationException)
         {
             return null;
+        }
+    }
+    public static IEnumerable<UserFileKey> GetUserKeys(int fileId)
+    {
+        var args = new Dictionary<string, string> { { "@FileId", fileId.ToString() } };
+        try
+        {
+            return DataBaseService.ReadMany<UserFileKey>(ReadUserKeysQuery, args);
+        }
+        catch (InvalidOperationException)
+        {
+            return [];
         }
     }
 
