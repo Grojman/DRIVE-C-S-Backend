@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Microsoft.AspNetCore.StaticFiles;
 
 public static class UserService
@@ -132,18 +131,4 @@ public static class UserService
             return -1; //Se trata como "Not Found"
         }
     }
-
-    static readonly ConcurrentDictionary<string, int> UsuariosConectados = new();
-
-    public static bool TryGetUserId(string sessionId, out int userId) => UsuariosConectados.TryGetValue(sessionId, out userId);
-    public static bool IsConnected(string sessionId) => UsuariosConectados.ContainsKey(sessionId);
-    public static void deleteKey(string sessionId) => UsuariosConectados.TryRemove(sessionId, out _);
-
-    public static string addKey(int userId)
-    {
-        string key = Guid.NewGuid().ToString();
-        UsuariosConectados[key] = userId;
-        return key;
-    }
-
 }

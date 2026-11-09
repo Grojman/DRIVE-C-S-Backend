@@ -5,13 +5,14 @@ using System.Text.Json.Serialization;
 internal class Program
 {   
 
-    public record LoggedInUser(int Id, string Name, string CurrentId, string PrivateKey, string PublicKey);
+    public record LoggedInUser(int Id, string Name, string AccessToken, string RefreshToken, string PrivateKey, string PublicKey);
 
     private static void Main(string[] args)
     {
         DataBaseService.Start();
         FileSystemService.Start();
         var builder = WebApplication.CreateBuilder(args);
+        JwtService.Configure(builder.Configuration);
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = null; // tamaño de envío ilimitado
@@ -50,8 +51,8 @@ internal class Program
                     UserService.UserDB? DBuser = UserService.GetUser(person.user, person.password);
                     if(DBuser is not null)
                     {
-                        string id = UserService.addKey(DBuser.Id); //Results.Ok(new { success = true, message = "Authenticated"});
-                        LoggedInUser new_user = new (DBuser.Id, person.user, id, DBuser.PrivateKey, DBuser.PublicKey);
+                        var tokens = JwtService.IssueTokens(DBuser.Id);
+                        LoggedInUser new_user = new (DBuser.Id, person.user, tokens.AccessToken, tokens.RefreshToken, DBuser.PrivateKey, DBuser.PublicKey);
                         return Results.Ok(new_user);
                     }
                     return Results.Unauthorized();
@@ -74,8 +75,8 @@ internal class Program
                     UserService.UserDB? DBuser = UserService.GetUser(person.user, person.password);
                     if (DBuser != null)
                     {
-                        string id = UserService.addKey(DBuser.Id);
-                        LoggedInUser new_user = new (DBuser.Id, person.user, id, DBuser.PrivateKey, DBuser.PublicKey);
+                        var tokens = JwtService.IssueTokens(DBuser.Id);
+                        LoggedInUser new_user = new (DBuser.Id, person.user, tokens.AccessToken, tokens.RefreshToken, DBuser.PrivateKey, DBuser.PublicKey);
                         return Results.Ok(new_user);
                     }
                     return Results.Conflict();
@@ -100,13 +101,22 @@ internal class Program
         //  "/logout": POST: userId
         securedGroup.MapPost("/logout", async(HttpContext request) =>
         {
-            var id = request.GetSessionId();
-            if(UserService.IsConnected(id))
-            {
-                UserService.deleteKey(id);
-                return Results.Ok("Succesfully logged out");
-            }
-            return Results.BadRequest("Error at logging out.");
+            var data = await request.Request.ReadBase64JsonAsync<RefreshTokenDTO>();
+            if (data is null || string.IsNullOrEmpty(data.RefreshToken)) return Results.BadRequest("Error at logging out.");
+
+            // El token de acceso sigue siendo válido hasta que caduque; lo que se invalida es el de refresco
+            JwtService.RevokeRefreshToken(data.RefreshToken);
+            return Results.Ok("Succesfully logged out");
+        });
+
+        //  "/refresh": POST: token de refresco -> nuevo par de tokens (el anterior deja de valer)
+        app.MapPost("/refresh", async(HttpContext request) =>
+        {
+            var data = await request.Request.ReadBase64JsonAsync<RefreshTokenDTO>();
+            if (data is null || string.IsNullOrEmpty(data.RefreshToken)) return Results.BadRequest();
+
+            var tokens = JwtService.Refresh(data.RefreshToken);
+            return tokens is null ? Results.Unauthorized() : Results.Ok(tokens);
         });
 
         //  - "/files" GET: userId, Ruta (SOLO METADATOS)[Vector]

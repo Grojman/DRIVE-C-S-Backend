@@ -112,5 +112,6 @@ public static class DataBaseService
     {
         UserService.CreateTable();
         FileDataService.CreateTables();
+        JwtService.CreateTable();
     }
 }

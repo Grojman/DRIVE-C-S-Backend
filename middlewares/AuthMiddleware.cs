@@ -3,7 +3,6 @@ public sealed class RequireSessionAttribute : Attribute { }
 public class AuthMiddleware
 {
     public const string USER_ID_KEY = "UserId";
-    public const string SESSION_KEY = "SessionId";
     private readonly RequestDelegate _next;
 
     public AuthMiddleware(RequestDelegate next)
@@ -19,16 +18,17 @@ public class AuthMiddleware
             return;
         }
 
-        string? session = context.Request.Headers.Authorization;
-        if (string.IsNullOrEmpty(session) || !UserService.TryGetUserId(session, out int userId))
+        string? header = context.Request.Headers.Authorization;
+        const string bearer = "Bearer ";
+        if (string.IsNullOrEmpty(header) || !header.StartsWith(bearer, StringComparison.OrdinalIgnoreCase) ||
+            !JwtService.TryValidateAccessToken(header[bearer.Length..].Trim(), out int userId))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return;
         }
 
-        // Handlers read these instead of parsing the header again
+        // Handlers read this instead of parsing the token again
         context.Items[USER_ID_KEY] = userId;
-        context.Items[SESSION_KEY] = session;
 
         await _next(context);
     }
