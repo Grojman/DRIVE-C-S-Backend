@@ -4,10 +4,6 @@ using System.Text.Json;
 public static class Extensions
 {
     public static int GetUserId(this HttpContext context) => (int)context.Items[AuthMiddleware.USER_ID_KEY]!;
-<<<<<<< HEAD
-=======
-
->>>>>>> a0b594b15e74802cea79df61adde04cd937aa196
     public static string Decode(this string value)
     {
         return Encoding.UTF8.GetString(Convert.FromBase64String(value));
