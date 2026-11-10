@@ -1,0 +1,30 @@
+@baseUrl = http://localhost:5051
+@accessToken = {{login.response.body.AccessToken}}
+
+### Register a demo account (the key strings here are placeholders, not real ciphertext)
+POST {{baseUrl}}/signin
+Content-Type: text/plain
+
+eyJ1c2VyIjoiZGVtby11c2VyIiwicGFzc3dvcmQiOiJEZW1vUGFzc3dvcmQxMjMhIiwicHJpdmF0ZV9rZXkiOiJzYW1wbGUtZW5jcnlwdGVkLXByaXZhdGUta2V5IiwicHVibGljX2tleSI6InNhbXBsZS1wdWJsaWMta2V5Iiwia2V5X3NhbHQiOiJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnPT0iLCJrZXlfa2RmIjoiYXJnb24yaWQtdjE5LW02NTUzNi10My1wMS1sMTYifQ==
+
+### Login to the demo account
+# Request bodies are Base64-encoded JSON, matching the Angular client.
+# @name login
+POST {{baseUrl}}/login
+Content-Type: text/plain
+
+eyJ1c2VyIjoiZGVtby11c2VyIiwicGFzc3dvcmQiOiJEZW1vUGFzc3dvcmQxMjMhIn0=
+
+### Update a legacy user's private-key ciphertext after login
+# Use only when the legacy login response has no KeySalt. Supply its bearer token.
+PUT {{baseUrl}}/user/private-key
+Authorization: Bearer {{accessToken}}
+Content-Type: text/plain
+
+eyJwcml2YXRlX2tleSI6InNhbXBsZS1yZWVuY3J5cHRlZC1wcml2YXRlLWtleSIsImtleV9zYWx0IjoiTURFeU16UTFOamM0T1dGaVkyUmxaZz09Iiwia2V5X2tkZiI6ImFyZ29uMmlkLXYxOS1tNjU1MzYtdDMtcDEtbDE2In0=
+
+### Reset an expired legacy account (requires a matching legacy account and expired migration window)
+POST {{baseUrl}}/password/reset
+Content-Type: text/plain
+
+eyJ1c2VyIjoibGVnYWN5LWRlbW8iLCJvbGRfcGFzc3dvcmQiOiJMZWdhY3lQYXNzd29yZDEyMyEiLCJuZXdfcGFzc3dvcmQiOiJOZXdQYXNzd29yZDQ1NiEiLCJwcml2YXRlX2tleSI6InNhbXBsZS1yZWVuY3J5cHRlZC1wcml2YXRlLWtleSIsImtleV9zYWx0IjoiTURFeU16UTFOamM0T1dGaVkyUmxaZz09Iiwia2V5X2tkZiI6ImFyZ29uMmlkLXYxOS1tNjU1MzYtdDMtcDEtbDE2In0=

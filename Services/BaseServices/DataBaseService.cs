@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
 public static class DataBaseService
 {
     public const string ConnectionString = "Data Source=Data/database.db";
-    private static SqliteConnection _connection;
+    private static SqliteConnection _connection = null!;
 
     public static void Start()
     {
@@ -98,6 +98,11 @@ public static class DataBaseService
 
     public static void Execute(string query, Dictionary<string, string> args)
     {
+        ExecuteNonQuery(query, args);
+    }
+
+    public static int ExecuteNonQuery(string query, Dictionary<string, string> args)
+    {
         using var command = _connection.CreateCommand();
         command.CommandText = query;
         foreach(var arg in args)
@@ -105,7 +110,7 @@ public static class DataBaseService
             command.Parameters.AddWithValue(arg.Key, arg.Value);
         }
 
-        command.ExecuteNonQuery();
+        return command.ExecuteNonQuery();
     }
 
     public static void CheckDatabase()

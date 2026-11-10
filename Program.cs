@@ -5,14 +5,27 @@ using System.Text.Json.Serialization;
 internal class Program
 {   
 
-    public record LoggedInUser(int Id, string Name, string AccessToken, string RefreshToken, string PrivateKey, string PublicKey);
+    /// <summary>Authenticated user data and tokens returned after login or registration.</summary>
+    public record LoggedInUser(
+        int Id,
+        string Name,
+        string AccessToken,
+        string RefreshToken,
+        string PrivateKey,
+        string PublicKey,
+        string? KeySalt,
+        string? KeyKdf);
+
+    /// <summary>Response asking a legacy account to reset its password after the migration deadline.</summary>
+    public record LegacyPasswordResetRequired(string Code, string PrivateKey);
 
     private static void Main(string[] args)
     {
-        DataBaseService.Start();
-        FileSystemService.Start();
         var builder = WebApplication.CreateBuilder(args);
         JwtService.Configure(builder.Configuration);
+        var passwordHasher = new Argon2IDService(builder.Configuration);
+        DataBaseService.Start();
+        FileSystemService.Start();
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = null; // tamaño de envío ilimitado
@@ -28,6 +41,7 @@ internal class Program
             o.SerializerOptions.PropertyNamingPolicy = null; // se mantiene siempre en pascalCase
             o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()); //evita que los enums se parseen como enteros
         });
+        builder.Services.AddOpenApi();
 
         var app = builder.Build();
 
@@ -35,61 +49,244 @@ internal class Program
 
         app.UseMiddleware<AuthMiddleware>();
 
+        if (app.Environment.IsDevelopment())
+        {
+            app.MapOpenApi();
+        }
+
         app.MapGet("/", () => "Hello World!");
 
         var securedGroup = app.MapGroup("").RequireSession();
 
-        //- "/login": POST: Usuario, Contraseña
+        //- "/login": POST: username, password
         app.MapPost("/login", async(HttpContext request) =>
         {
-            var person = await request.Request.ReadBase64JsonAsync<Usuario_login_DTO>();
-            
-            if(person is not null)
+            if (!IsSecureAuthenticationRequest(request))
             {
-                if (UserService.UserExists(person.user, person.password))
-                {   
-                    UserService.UserDB? DBuser = UserService.GetUser(person.user, person.password);
-                    if(DBuser is not null)
-                    {
-                        var tokens = JwtService.IssueTokens(DBuser.Id);
-                        LoggedInUser new_user = new (DBuser.Id, person.user, tokens.AccessToken, tokens.RefreshToken, DBuser.PrivateKey, DBuser.PublicKey);
-                        return Results.Ok(new_user);
-                    }
+                return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
+            }
+
+            var person = await request.Request.ReadBase64JsonAsync<Usuario_login_DTO>();
+            if (person is null ||
+                string.IsNullOrWhiteSpace(person.user) ||
+                string.IsNullOrEmpty(person.password) ||
+                person.password.Length > 1024)
+            {
+                return Results.BadRequest();
+            }
+
+            var user = UserService.GetUser(person.user);
+            if (user is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            if (user.PasswordScheme == "argon2id")
+            {
+                if (!await passwordHasher.VerifyPasswordAsync(person.password, user.Password))
+                {
                     return Results.Unauthorized();
                 }
-                
             }
-            return Results.BadRequest();
-        });
-
-
-        //- "/signin": POST: usuario Contraseña pk Pk
-        app.MapPost("/signin", async(HttpContext request) =>
-        {
-            var person = await request.Request.ReadBase64JsonAsync<Usuario_registro_DTO>();
-            if(person is not null)
+            else if (user.PasswordScheme == "legacy")
             {
-                if (UserService.IsUsernameTaken(person.user)) return Results.Conflict();
-                if(UserService.postUser(person.user, person.password, person.private_key, person.public_key))
+                if (!UserService.IsLegacyPasswordValid(user, person.password))
                 {
-                    UserService.UserDB? DBuser = UserService.GetUser(person.user, person.password);
-                    if (DBuser != null)
+                    return Results.Unauthorized();
+                }
+
+                if (!UserService.IsLegacyMigrationOpen())
+                {
+                    return Results.Json(
+                        new LegacyPasswordResetRequired("LegacyPasswordResetRequired", user.PrivateKey),
+                        statusCode: StatusCodes.Status428PreconditionRequired);
+                }
+
+                var upgradedHash = await passwordHasher.HashPasswordAsync(person.password);
+                if (!UserService.UpgradeLegacyPassword(user.Username, user.Password, upgradedHash))
+                {
+                    user = UserService.GetUser(person.user);
+                    if (user is null ||
+                        user.PasswordScheme != "argon2id" ||
+                        !await passwordHasher.VerifyPasswordAsync(person.password, user.Password))
                     {
-                        var tokens = JwtService.IssueTokens(DBuser.Id);
-                        LoggedInUser new_user = new (DBuser.Id, person.user, tokens.AccessToken, tokens.RefreshToken, DBuser.PrivateKey, DBuser.PublicKey);
-                        return Results.Ok(new_user);
+                        return Results.Unauthorized();
                     }
-                    return Results.Conflict();
                 }
             }
-            return Results.Unauthorized();
-        });
+            else
+            {
+                return Results.Unauthorized();
+            }
+
+            user = UserService.GetUser(person.user);
+            if (user is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            var tokens = JwtService.IssueTokens(user.Id);
+            return Results.Ok(ToLoggedInUser(user, tokens));
+        })
+            .WithName("Login")
+            .WithSummary("Authenticate and migrate an existing password when needed")
+            .WithDescription("Accepts the raw password over HTTPS. Legacy accounts are migrated during the 90-day window; after it, a reset is required.")
+            .Produces<LoggedInUser>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces<LegacyPasswordResetRequired>(StatusCodes.Status428PreconditionRequired)
+            .Produces(StatusCodes.Status426UpgradeRequired);
+
+        //- "/signin": POST: username, password, encrypted private/public keys, key derivation metadata
+        app.MapPost("/signin", async(HttpContext request) =>
+        {
+            if (!IsSecureAuthenticationRequest(request))
+            {
+                return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
+            }
+
+            var person = await request.Request.ReadBase64JsonAsync<Usuario_registro_DTO>();
+            if (person is null ||
+                string.IsNullOrWhiteSpace(person.user) ||
+                string.IsNullOrEmpty(person.password) ||
+                person.password.Length is < 8 or > 1024 ||
+                string.IsNullOrEmpty(person.private_key) ||
+                string.IsNullOrEmpty(person.public_key) ||
+                !IsValidKeyMetadata(person.key_salt, person.key_kdf))
+            {
+                return Results.BadRequest();
+            }
+
+            if (UserService.IsUsernameTaken(person.user))
+            {
+                return Results.Conflict();
+            }
+
+            var passwordHash = await passwordHasher.HashPasswordAsync(person.password);
+            try
+            {
+                UserService.CreateUser(
+                    person.user,
+                    passwordHash,
+                    person.private_key,
+                    person.public_key,
+                    person.key_salt,
+                    person.key_kdf);
+            }
+            catch (Microsoft.Data.Sqlite.SqliteException)
+            {
+                return Results.Conflict();
+            }
+
+            var user = UserService.GetUser(person.user);
+            if (user is null)
+            {
+                return Results.Conflict();
+            }
+
+            var tokens = JwtService.IssueTokens(user.Id);
+            return Results.Ok(ToLoggedInUser(user, tokens));
+        })
+            .WithName("Register")
+            .WithSummary("Create an account using Argon2id")
+            .WithDescription("The client encrypts the private key first; the backend stores only its ciphertext and KDF metadata.")
+            .Produces<LoggedInUser>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status426UpgradeRequired);
+
+        app.MapPost("/password/reset", async(HttpContext request) =>
+        {
+            if (!IsSecureAuthenticationRequest(request))
+            {
+                return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
+            }
+
+            var data = await request.Request.ReadBase64JsonAsync<LegacyPasswordReset_DTO>();
+            if (data is null ||
+                string.IsNullOrWhiteSpace(data.user) ||
+            string.IsNullOrEmpty(data.old_password) ||
+            data.old_password.Length > 1024 ||
+            string.IsNullOrEmpty(data.new_password) ||
+            data.new_password.Length is < 8 or > 1024 ||
+            string.IsNullOrEmpty(data.private_key) ||
+            !IsValidKeyMetadata(data.key_salt, data.key_kdf))
+            {
+                return Results.BadRequest();
+            }
+
+            if (UserService.IsLegacyMigrationOpen())
+            {
+                return Results.Conflict();
+            }
+
+            var user = UserService.GetUser(data.user);
+            if (user is null || !UserService.IsLegacyPasswordValid(user, data.old_password))
+            {
+                return Results.Unauthorized();
+            }
+
+            var passwordHash = await passwordHasher.HashPasswordAsync(data.new_password);
+            if (!UserService.ResetLegacyPassword(
+                data.user,
+                user.Password,
+                passwordHash,
+                data.private_key,
+                data.key_salt,
+                data.key_kdf))
+            {
+                return Results.Conflict();
+            }
+
+            user = UserService.GetUser(data.user);
+            if (user is null)
+            {
+                return Results.Conflict();
+            }
+
+            var tokens = JwtService.IssueTokens(user.Id);
+            return Results.Ok(ToLoggedInUser(user, tokens));
+        })
+            .WithName("ResetLegacyPassword")
+            .WithSummary("Reset a legacy password after the migration window")
+            .WithDescription("Requires the old password and a new password. The client must re-encrypt the private key with the new password.")
+            .Produces<LoggedInUser>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status426UpgradeRequired);
 
         //  "/username/{username}": GET: Usuario 
         app.MapGet("/username/{username}", async(string username) =>
         {
             return Results.Ok(UserService.IsUsernameTaken(username));
         });
+
+        securedGroup.MapPut("/user/private-key", async(HttpContext request) =>
+        {
+            var data = await request.Request.ReadBase64JsonAsync<PrivateKeyUpdate_DTO>();
+            if (data is null ||
+                string.IsNullOrEmpty(data.private_key) ||
+                !IsValidKeyMetadata(data.key_salt, data.key_kdf))
+            {
+                return Results.BadRequest();
+            }
+
+            return UserService.UpdatePrivateKey(
+                request.GetUserId(),
+                data.private_key,
+                data.key_salt,
+                data.key_kdf)
+                ? Results.Ok(true)
+                : Results.Conflict();
+        })
+            .WithName("UpdatePrivateKey")
+            .WithSummary("Store a migrated encrypted private key")
+            .WithDescription("Requires a valid session and stores only ciphertext, salt, and KDF metadata.")
+            .Produces<bool>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status409Conflict);
 
         securedGroup.MapGet("/users", async(HttpContext request) =>
         {
@@ -326,4 +523,36 @@ internal class Program
 
         app.Run();
     }
-}   
+
+    private static LoggedInUser ToLoggedInUser(UserService.UserDB user, AuthTokens tokens) =>
+        new(
+            user.Id,
+            user.Username,
+            tokens.AccessToken,
+            tokens.RefreshToken,
+            user.PrivateKey,
+            user.PublicKey,
+            user.KeySalt,
+            user.KeyKdf);
+
+    private static bool IsValidKeyMetadata(string salt, string keyKdf)
+    {
+        if (string.IsNullOrEmpty(salt) || salt.Length != 24 || keyKdf != UserService.CurrentKeyKdf)
+        {
+            return false;
+        }
+
+        try
+        {
+            return Convert.FromBase64String(salt).Length == 16;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsSecureAuthenticationRequest(HttpContext request) =>
+        request.Request.IsHttps ||
+        request.Connection.RemoteIpAddress is { } remoteIp && System.Net.IPAddress.IsLoopback(remoteIp);
+}

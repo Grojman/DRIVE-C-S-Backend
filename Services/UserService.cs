@@ -1,8 +1,22 @@
-using Microsoft.AspNetCore.StaticFiles;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.Data.Sqlite;
 
 public static class UserService
 {
-    public record UserDB(int Id, string Username, string PublicKey, string PrivateKey);
+    public const int LegacyMigrationDays = 90;
+    public const string CurrentKeyKdf = "argon2id-v19-m65536-t3-p1-l16";
+    private const string LegacyMigrationStartedSetting = "LegacyPasswordMigrationStartedUtc";
+
+    public record UserDB(
+        int Id,
+        string Username,
+        string Password,
+        string PasswordScheme,
+        string PublicKey,
+        string PrivateKey,
+        string? KeySalt,
+        string? KeyKdf);
 
     private const string CreateUsersTableQuery = @"
         CREATE TABLE IF NOT EXISTS Users (
@@ -10,125 +24,170 @@ public static class UserService
             Username TEXT NOT NULL UNIQUE,
             Password TEXT NOT NULL,
             PrivateKey TEXT NOT NULL,
-            PublicKey TEXT NOT NULL
+            PublicKey TEXT NOT NULL,
+            PasswordScheme TEXT NOT NULL DEFAULT 'legacy',
+            KeySalt TEXT NULL,
+            KeyKdf TEXT NULL
         )";
 
     public static void CreateTable()
     {
-        DataBaseService.Execute(CreateUsersTableQuery, new Dictionary<string, string>());
+        DataBaseService.Execute(CreateUsersTableQuery, []);
+
+        var columns = DataBaseService.ReadMany(
+            "PRAGMA table_info(Users)",
+            [],
+            reader => reader.GetString(1)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (!columns.Contains("PasswordScheme"))
+        {
+            DataBaseService.Execute("ALTER TABLE Users ADD COLUMN PasswordScheme TEXT NOT NULL DEFAULT 'legacy'", []);
+        }
+        if (!columns.Contains("KeySalt"))
+        {
+            DataBaseService.Execute("ALTER TABLE Users ADD COLUMN KeySalt TEXT NULL", []);
+        }
+        if (!columns.Contains("KeyKdf"))
+        {
+            DataBaseService.Execute("ALTER TABLE Users ADD COLUMN KeyKdf TEXT NULL", []);
+        }
+
+        DataBaseService.Execute(
+            "CREATE TABLE IF NOT EXISTS ApplicationSettings (Key TEXT PRIMARY KEY, Value TEXT NOT NULL)",
+            []);
+        DataBaseService.Execute(
+            "INSERT OR IGNORE INTO ApplicationSettings (Key, Value) VALUES (@Key, @Value)",
+            new Dictionary<string, string>
+            {
+                ["@Key"] = LegacyMigrationStartedSetting,
+                ["@Value"] = DateTimeOffset.UtcNow.ToString("O")
+            });
     }
 
     public static IEnumerable<UserDB> GetUsers(int id)
     {
-        var query = "SELECT Id, Username, PublicKey, PrivateKey FROM Users WHERE Id != @id";
-        var args = new Dictionary<string, string>
-        {
-            ["@id"]=id.ToString(),
-        };
-
-        try
-        {
-            return DataBaseService.ReadMany<UserDB>(query, args);
-        } catch
-        {
-            return [];
-        }
+        const string query = "SELECT Id, Username, '', '', PublicKey, PrivateKey, NULL, NULL FROM Users WHERE Id != @id";
+        return DataBaseService.ReadMany(query, new Dictionary<string, string> { ["@id"] = id.ToString() }, MapUser);
     }
 
-    public static UserDB? GetUser(string name, string passowrd)
+    public static UserDB? GetUser(string username)
     {
-        var query = "SELECT Id, Username, PublicKey, PrivateKey FROM Users WHERE Username=@username AND Password=@contrasena";
-        var args = new Dictionary<string, string>
-        {
-            ["@username"]=name,
-            ["@contrasena"]=passowrd
-        };
-
+        const string query = "SELECT Id, Username, Password, PasswordScheme, PublicKey, PrivateKey, KeySalt, KeyKdf FROM Users WHERE Username = @username";
         try
         {
-            var count = DataBaseService.ReadOne<UserDB>(query, args, r => new UserDB(r.GetInt32(0), r.GetString(1), r.GetString(2), r.GetString(3)));
-            return count;
+            return DataBaseService.ReadOne(
+                query,
+                new Dictionary<string, string> { ["@username"] = username },
+                MapUser);
         }
         catch (InvalidOperationException)
         {
-            return null; //Se trata como "Not Found"
+            return null;
         }
     }
+
     public static bool IsUsernameTaken(string username)
     {
-        var query = "SELECT COUNT(*) FROM Users WHERE Username = @username";
-        var args = new Dictionary<string, string> { { "@username", username } };
-        int count;
-        try
-        {
-            count = DataBaseService.ReadOne<int>(query, args);
-            
-        } catch (InvalidOperationException)
+        const string query = "SELECT COUNT(*) FROM Users WHERE Username = @username";
+        return DataBaseService.ReadOne<int>(query, new Dictionary<string, string> { ["@username"] = username }) > 0;
+    }
+
+    public static bool IsLegacyMigrationOpen()
+    {
+        var startedAt = DataBaseService.ReadOne<string>(
+            "SELECT Value FROM ApplicationSettings WHERE Key = @Key",
+            new Dictionary<string, string> { ["@Key"] = LegacyMigrationStartedSetting });
+        var deadline = DateTimeOffset.Parse(startedAt).AddDays(LegacyMigrationDays);
+        return DateTimeOffset.UtcNow < deadline;
+    }
+
+    public static bool IsLegacyPasswordValid(UserDB user, string password)
+    {
+        if (user.PasswordScheme != "legacy" || user.Password.Length != 32)
         {
             return false;
         }
-        return count > 0;
+
+        var md5Hex = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(password))).ToLowerInvariant();
+        var legacyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(md5Hex))).ToLowerInvariant();
+        var legacyLoginPassword = legacyHash[..32];
+
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(user.Password),
+            Encoding.UTF8.GetBytes(legacyLoginPassword));
     }
 
-    public static bool UserExists(string username, string contrasena)
-    {   
-        //Devolver 1 cuando exista el usuario
-        var query = "SELECT COUNT(1) FROM Users WHERE Username=@username AND Password=@contrasena";
-        var args = new Dictionary<string, string>
-        {
-            ["@username"]=username,
-            ["@contrasena"]=contrasena
-        };
-
-        try
-        {
-            var count = DataBaseService.ReadOne<int>(query, args);
-            return count>0;
-        }
-        catch (InvalidOperationException)
-        {
-            return false; //Se trata como "Not Found"
-        }
-    }
-
-    public static bool postUser(string username, string password, string PrivateKey, string PublicKey)
+    public static void CreateUser(
+        string username,
+        string passwordHash,
+        string privateKey,
+        string publicKey,
+        string keySalt,
+        string keyKdf)
     {
-        var query="INSERT INTO Users(USERNAME, PASSWORD, PRIVATEKEY, PUBLICKEY) VALUES(@username, @password, @PrivateKey, @PublicKey)";
-        var args = new Dictionary<string, string>
+        const string query = "INSERT INTO Users (Username, Password, PrivateKey, PublicKey, PasswordScheme, KeySalt, KeyKdf) VALUES (@username, @password, @privateKey, @publicKey, 'argon2id', @keySalt, @keyKdf)";
+        DataBaseService.Execute(query, new Dictionary<string, string>
         {
-            ["@username"]=username,
-            ["@password"]=password,
-            ["@PrivateKey"]=PrivateKey,
-            ["@PublicKey"]=PublicKey
-        };
-        try
-        {
-            DataBaseService.Execute(query, args);
-            return true;
-        }
-        catch(Exception)
-        {
-            return false;
-        }
+            ["@username"] = username,
+            ["@password"] = passwordHash,
+            ["@privateKey"] = privateKey,
+            ["@publicKey"] = publicKey,
+            ["@keySalt"] = keySalt,
+            ["@keyKdf"] = keyKdf
+        });
     }
 
-    public static int getUserId(string username, string password)
+    public static bool UpgradeLegacyPassword(string username, string legacyPassword, string passwordHash)
     {
-        var query = "SELECT Id FROM Users WHERE Username=@username AND Password=@contrasena";
-        var args = new Dictionary<string, string>
+        const string query = "UPDATE Users SET Password = @password, PasswordScheme = 'argon2id' WHERE Username = @username AND Password = @legacyPassword AND PasswordScheme = 'legacy'";
+        return DataBaseService.ExecuteNonQuery(query, new Dictionary<string, string>
         {
-            ["@username"]=username,
-            ["@contrasena"]=password
-        };
-
-        try
-        {
-            var count = DataBaseService.ReadOne<int>(query, args);
-            return count;
-        }
-        catch (InvalidOperationException)
-        {
-            return -1; //Se trata como "Not Found"
-        }
+            ["@username"] = username,
+            ["@legacyPassword"] = legacyPassword,
+            ["@password"] = passwordHash
+        }) == 1;
     }
+
+    public static bool ResetLegacyPassword(
+        string username,
+        string legacyPassword,
+        string passwordHash,
+        string privateKey,
+        string keySalt,
+        string keyKdf)
+    {
+        const string query = "UPDATE Users SET Password = @password, PasswordScheme = 'argon2id', PrivateKey = @privateKey, KeySalt = @keySalt, KeyKdf = @keyKdf WHERE Username = @username AND Password = @legacyPassword AND PasswordScheme = 'legacy'";
+        return DataBaseService.ExecuteNonQuery(query, new Dictionary<string, string>
+        {
+            ["@username"] = username,
+            ["@legacyPassword"] = legacyPassword,
+            ["@password"] = passwordHash,
+            ["@privateKey"] = privateKey,
+            ["@keySalt"] = keySalt,
+            ["@keyKdf"] = keyKdf
+        }) == 1;
+    }
+
+    public static bool UpdatePrivateKey(int userId, string privateKey, string keySalt, string keyKdf)
+    {
+        const string query = "UPDATE Users SET PrivateKey = @privateKey, KeySalt = @keySalt, KeyKdf = @keyKdf WHERE Id = @id AND KeySalt IS NULL";
+        return DataBaseService.ExecuteNonQuery(query, new Dictionary<string, string>
+        {
+            ["@id"] = userId.ToString(),
+            ["@privateKey"] = privateKey,
+            ["@keySalt"] = keySalt,
+            ["@keyKdf"] = keyKdf
+        }) == 1;
+    }
+
+    private static UserDB MapUser(SqliteDataReader reader) =>
+        new(
+            reader.GetInt32(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7));
 }
