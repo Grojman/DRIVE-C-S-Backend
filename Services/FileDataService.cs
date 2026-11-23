@@ -98,7 +98,8 @@ public static class FileDataService
         var args = new Dictionary<string, string> { { "@FileId", fileId.ToString() } };
         try
         {
-            return DataBaseService.ReadMany<UserFileKey>(ReadUserKeysQuery, args);
+            return DataBaseService.ReadMany(ReadUserKeysQuery, args,
+                reader => new UserFileKey(reader.GetInt32(1), reader.GetString(0)));
         }
         catch (InvalidOperationException)
         {
