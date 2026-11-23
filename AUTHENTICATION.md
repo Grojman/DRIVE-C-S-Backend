@@ -32,3 +32,24 @@ Update the frontend and backend together. Login/register/reset requests now cont
 The browser derives a separate AES-128 key with Argon2id and a fresh random 16-byte salt. The encrypted private key, salt, and KDF version/parameters are stored by the backend. The backend pepper is not involved in this derivation and is never sent to the browser.
 
 The backend automatically adds the new account/key metadata columns to an existing SQLite database. Back up the database before deploying this migration.
+
+## Authenticator (TOTP)
+
+Users can enable TOTP from the home-page navbar. They must scan the generated QR code in Microsoft Authenticator and confirm a six-digit code before it is enabled. Microsoft Authenticator uses the standard offline `otpauth://` TOTP format; there is no Microsoft API or account connection involved. Future logins require a fresh code before access and refresh tokens are issued. Users may trust a device for 30 days; this is stored in an HttpOnly cookie and a server-side token hash.
+
+TOTP secrets are encrypted in SQLite. Configure a stable `Jwt:Secret` (at least 32 bytes) or supply a dedicated Base64-encoded 32-byte `TOTP:EncryptionKey` through ASP.NET Core User Secrets or the production secret manager. Do not commit either key. If using the JWT secret to derive the TOTP encryption key, keep it stable: changing it makes existing TOTP secrets unreadable. A new TOTP encryption key must also be backed up and kept stable.
+
+For local development, create a stable JWT signing/encryption key in User Secrets:
+
+```powershell
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+$bytes = New-Object byte[] 32
+$rng.GetBytes($bytes)
+$key = [Convert]::ToBase64String($bytes)
+dotnet user-secrets set "Jwt:Secret" $key --project .\DRIVE-C-S-Backend.csproj
+[Array]::Clear($bytes, 0, $bytes.Length)
+$rng.Dispose()
+Remove-Variable key, bytes, rng
+```
+
+The backend creates the TOTP tables automatically. Back up the SQLite database and encryption key together.

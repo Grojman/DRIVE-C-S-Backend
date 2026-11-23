@@ -86,6 +86,22 @@ public static class UserService
         }
     }
 
+    public static UserDB? GetUserById(int userId)
+    {
+        const string query = "SELECT Id, Username, Password, PasswordScheme, PublicKey, PrivateKey, KeySalt, KeyKdf FROM Users WHERE Id = @id";
+        try
+        {
+            return DataBaseService.ReadOne(
+                query,
+                new Dictionary<string, string> { ["@id"] = userId.ToString() },
+                MapUser);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
     public static bool IsUsernameTaken(string username)
     {
         const string query = "SELECT COUNT(*) FROM Users WHERE Username = @username";

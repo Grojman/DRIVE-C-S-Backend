@@ -28,3 +28,34 @@ POST {{baseUrl}}/password/reset
 Content-Type: text/plain
 
 eyJ1c2VyIjoibGVnYWN5LWRlbW8iLCJvbGRfcGFzc3dvcmQiOiJMZWdhY3lQYXNzd29yZDEyMyEiLCJuZXdfcGFzc3dvcmQiOiJOZXdQYXNzd29yZDQ1NiEiLCJwcml2YXRlX2tleSI6InNhbXBsZS1yZWVuY3J5cHRlZC1wcml2YXRlLWtleSIsImtleV9zYWx0IjoiTURFeU16UTFOamM0T1dGaVkyUmxaZz09Iiwia2V5X2tkZiI6ImFyZ29uMmlkLXYxOS1tNjU1MzYtdDMtcDEtbDE2In0=
+
+### Get TOTP status
+GET {{baseUrl}}/totp
+Authorization: Bearer {{accessToken}}
+
+### Begin authenticator enrollment and return a QR code
+POST {{baseUrl}}/totp/enroll
+Authorization: Bearer {{accessToken}}
+Content-Type: text/plain
+
+e30=
+
+### Confirm authenticator enrollment (replace 123456 with the current authenticator code)
+POST {{baseUrl}}/totp/enroll/verify
+Authorization: Bearer {{accessToken}}
+Content-Type: text/plain
+
+eyJDb2RlIjoiMTIzNDU2In0=
+
+### Verify a login challenge (replace the token and code; trustDevice is optional)
+POST {{baseUrl}}/totp/login/verify
+Content-Type: text/plain
+
+eyJDaGFsbGVuZ2VUb2tlbiI6InRvdHAtY2hhbGxlbmdlLXRva2VuIiwiQ29kZSI6IjEyMzQ1NiIsIlRydXN0RGV2aWNlIjp0cnVlfQ==
+
+### Disable TOTP
+DELETE {{baseUrl}}/totp
+Authorization: Bearer {{accessToken}}
+Content-Type: text/plain
+
+e30=

@@ -18,13 +18,23 @@ internal class Program
 
     /// <summary>Response asking a legacy account to reset its password after the migration deadline.</summary>
     public record LegacyPasswordResetRequired(string Code, string PrivateKey);
+    /// <summary>Requests a TOTP code to complete login without issuing normal session tokens.</summary>
+    public sealed record TotpLoginRequired(string TotpChallengeToken);
+    /// <summary>Payload for completing a TOTP login challenge.</summary>
+    public sealed record TotpLoginVerification(string ChallengeToken, string Code, bool TrustDevice);
+    /// <summary>Payload containing a six-digit authenticator code.</summary>
+    public sealed record TotpCodeVerification(string Code);
+    /// <summary>Indicates whether TOTP is enabled for the current account.</summary>
+    public sealed record TotpSettings(bool Enabled);
 
     private static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
         JwtService.Configure(builder.Configuration);
+        TOTPService.Configure(builder.Configuration);
         var passwordHasher = new Argon2IDService(builder.Configuration);
         DataBaseService.Start();
+        TOTPService.CreateTables();
         FileSystemService.Start();
         builder.WebHost.ConfigureKestrel(options =>
         {
@@ -34,7 +44,8 @@ internal class Program
         builder.Services.AddCors( o => o.AddDefaultPolicy(p =>
         p.WithOrigins("http://localhost:4200")
         .AllowAnyHeader()
-        .AllowAnyMethod()));
+        .AllowAnyMethod()
+        .AllowCredentials()));
 
         builder.Services.ConfigureHttpJsonOptions(o =>
         {
@@ -57,6 +68,118 @@ internal class Program
         app.MapGet("/", () => "Hello World!");
 
         var securedGroup = app.MapGroup("").RequireSession();
+
+        app.MapPost("/totp/login/verify", async (HttpContext request) =>
+        {
+            if (!IsSecureAuthenticationRequest(request))
+            {
+                return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
+            }
+
+            var data = await request.Request.ReadBase64JsonAsync<TotpLoginVerification>();
+            if (data is null ||
+                string.IsNullOrWhiteSpace(data.ChallengeToken) ||
+                string.IsNullOrWhiteSpace(data.Code) ||
+                !JwtService.TryValidateTotpChallengeToken(data.ChallengeToken, out var userId) ||
+                !TOTPService.IsEnabled(userId) ||
+                !TOTPService.VerifyLoginCode(userId, data.Code) ||
+                !TOTPService.ConsumeLoginChallenge(userId, data.ChallengeToken))
+            {
+                return Results.Unauthorized();
+            }
+
+            if (data.TrustDevice)
+            {
+                var trustedDevice = TOTPService.TrustDevice(userId);
+                request.Response.Cookies.Append(
+                    TOTPService.TrustedCookieName,
+                    trustedDevice.Token,
+                    CreateTrustedCookieOptions(request, trustedDevice.ExpiresAt));
+            }
+
+            var user = UserService.GetUserById(userId);
+            return user is null
+                ? Results.Unauthorized()
+                : Results.Ok(ToLoggedInUser(user, JwtService.IssueTokens(userId)));
+        })
+            .WithName("VerifyTOTPLogin")
+            .WithSummary("Complete login with a time-based one-time password")
+            .Produces<LoggedInUser>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status426UpgradeRequired);
+
+        securedGroup.MapGet("/totp", (HttpContext request) =>
+        {
+            if (!IsSecureAuthenticationRequest(request))
+            {
+                return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
+            }
+            return Results.Ok(new TotpSettings(TOTPService.IsEnabled(request.GetUserId())));
+        })
+            .WithName("GetTOTPSettings")
+            .WithSummary("Get the current user's TOTP status")
+            .Produces<TotpSettings>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status426UpgradeRequired);
+
+        securedGroup.MapPost("/totp/enroll", (HttpContext request) =>
+        {
+            if (!IsSecureAuthenticationRequest(request))
+            {
+                return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
+            }
+            var user = UserService.GetUserById(request.GetUserId());
+            if (user is null) return Results.Unauthorized();
+            if (TOTPService.IsEnabled(user.Id)) return Results.Conflict();
+            return Results.Ok(TOTPService.BeginEnrollment(user.Id, user.Username));
+        })
+            .WithName("BeginTOTPEnrollment")
+            .WithSummary("Generate a TOTP enrollment QR code")
+            .Produces<TOTPService.Enrollment>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status426UpgradeRequired);
+
+        securedGroup.MapPost("/totp/enroll/verify", async (HttpContext request) =>
+        {
+            if (!IsSecureAuthenticationRequest(request))
+            {
+                return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
+            }
+            var data = await request.Request.ReadBase64JsonAsync<TotpCodeVerification>();
+            if (data is null || string.IsNullOrWhiteSpace(data.Code)) return Results.BadRequest();
+            var userId = request.GetUserId();
+            if (!TOTPService.VerifyEnrollment(userId, data.Code)) return Results.Unauthorized();
+            JwtService.RevokeAllRefreshTokens(userId);
+            return Results.Ok(new TotpSettings(true));
+        })
+            .WithName("VerifyTOTPEnrollment")
+            .WithSummary("Confirm authenticator setup and enable TOTP")
+            .Produces<TotpSettings>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status426UpgradeRequired);
+
+        securedGroup.MapDelete("/totp", (HttpContext request) =>
+        {
+            if (!IsSecureAuthenticationRequest(request))
+            {
+                return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
+            }
+            var userId = request.GetUserId();
+            TOTPService.Disable(userId);
+            request.Response.Cookies.Delete(
+                TOTPService.TrustedCookieName,
+                CreateTrustedCookieOptions(request, DateTimeOffset.UtcNow));
+            JwtService.RevokeAllRefreshTokens(userId);
+            return Results.Ok(new TotpSettings(false));
+        })
+            .WithName("DisableTOTP")
+            .WithSummary("Disable TOTP for the current user")
+            .Produces<TotpSettings>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status426UpgradeRequired);
 
         //- "/login": POST: username, password
         app.MapPost("/login", async(HttpContext request) =>
@@ -125,6 +248,14 @@ internal class Program
                 return Results.Unauthorized();
             }
 
+            if (TOTPService.IsEnabled(user.Id) &&
+                !TOTPService.IsTrustedDevice(user.Id, request.Request.Cookies[TOTPService.TrustedCookieName]))
+            {
+                var challenge = JwtService.CreateTotpChallengeToken(user.Id);
+                TOTPService.StoreLoginChallenge(user.Id, challenge);
+                return Results.Ok(new TotpLoginRequired(challenge));
+            }
+
             var tokens = JwtService.IssueTokens(user.Id);
             return Results.Ok(ToLoggedInUser(user, tokens));
         })
@@ -132,6 +263,7 @@ internal class Program
             .WithSummary("Authenticate and migrate an existing password when needed")
             .WithDescription("Accepts the raw password over HTTPS. Legacy accounts are migrated during the 90-day window; after it, a reset is required.")
             .Produces<LoggedInUser>(StatusCodes.Status200OK)
+            .Produces<TotpLoginRequired>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status401Unauthorized)
             .Produces<LegacyPasswordResetRequired>(StatusCodes.Status428PreconditionRequired)
@@ -534,6 +666,16 @@ internal class Program
             user.PublicKey,
             user.KeySalt,
             user.KeyKdf);
+
+    private static CookieOptions CreateTrustedCookieOptions(HttpContext request, DateTimeOffset expiresAt) =>
+        new()
+        {
+            HttpOnly = true,
+            Secure = request.Request.IsHttps,
+            SameSite = SameSiteMode.Lax,
+            Expires = expiresAt,
+            Path = "/"
+        };
 
     private static bool IsValidKeyMetadata(string salt, string keyKdf)
     {

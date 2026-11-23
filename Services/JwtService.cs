@@ -62,6 +62,15 @@ public static class JwtService
 
     public static AuthTokens IssueTokens(int userId) => new(CreateAccessToken(userId), CreateRefreshToken(userId));
 
+    public static string CreateTotpChallengeToken(int userId) =>
+        CreateAccessToken(userId, "totp", TimeSpan.FromMinutes(5));
+
+    public static bool TryValidateTotpChallengeToken(string token, out int userId) =>
+        TryValidateToken(token, "totp", out userId);
+
+    public static byte[] DerivePurposeKey(string purpose) =>
+        HMACSHA256.HashData(_secret, Encoding.UTF8.GetBytes(purpose));
+
     // Intercambia un token de refresco por un par nuevo. El usado se borra (rotación) para que no pueda reutilizarse.
     public static AuthTokens? Refresh(string refreshToken)
     {
@@ -94,7 +103,21 @@ public static class JwtService
         DataBaseService.Execute(DeleteRefreshTokenQuery, new Dictionary<string, string> { { "@TokenHash", Hash(refreshToken) } });
     }
 
+    public static void RevokeAllRefreshTokens(int userId)
+    {
+        DataBaseService.Execute(
+            "DELETE FROM RefreshTokens WHERE UserId = @UserId",
+            new Dictionary<string, string> { ["@UserId"] = userId.ToString() });
+    }
+
     public static bool TryValidateAccessToken(string token, out int userId)
+        => TryValidateToken(token, "access", out userId, allowLegacyAccessToken: true);
+
+    private static bool TryValidateToken(
+        string token,
+        string expectedUse,
+        out int userId,
+        bool allowLegacyAccessToken = false)
     {
         userId = -1;
 
@@ -117,6 +140,14 @@ public static class JwtService
             if (!claims.TryGetProperty("iss", out var iss) || iss.GetString() != _issuer) return false;
             if (!claims.TryGetProperty("exp", out var exp) || exp.GetInt64() < DateTimeOffset.UtcNow.ToUnixTimeSeconds()) return false;
             if (!claims.TryGetProperty("sub", out var sub) || !int.TryParse(sub.GetString(), out userId)) return false;
+            if (claims.TryGetProperty("use", out var use))
+            {
+                if (use.GetString() != expectedUse) return false;
+            }
+            else if (!allowLegacyAccessToken)
+            {
+                return false;
+            }
 
             return true;
         }
@@ -127,7 +158,7 @@ public static class JwtService
         }
     }
 
-    private static string CreateAccessToken(int userId)
+    private static string CreateAccessToken(int userId, string use = "access", TimeSpan? lifetime = null)
     {
         var now = DateTimeOffset.UtcNow;
         var header = JsonSerializer.Serialize(new Dictionary<string, object> { { "alg", Algorithm }, { "typ", "JWT" } });
@@ -136,7 +167,8 @@ public static class JwtService
             { "sub", userId.ToString() },
             { "iss", _issuer },
             { "iat", now.ToUnixTimeSeconds() },
-            { "exp", now.Add(_accessTokenLifetime).ToUnixTimeSeconds() }
+            { "exp", now.Add(lifetime ?? _accessTokenLifetime).ToUnixTimeSeconds() },
+            { "use", use }
         });
 
         var unsigned = $"{Base64UrlEncode(Encoding.UTF8.GetBytes(header))}.{Base64UrlEncode(Encoding.UTF8.GetBytes(payload))}";
