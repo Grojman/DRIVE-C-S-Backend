@@ -14,7 +14,9 @@ public static class TOTPService
     private static byte[]? _encryptionKey;
 
     /// <summary>QR image and manual setup key returned during authenticator enrollment.</summary>
-    public sealed record Enrollment(string QrCodePng, string ManualKey);
+    /// <param name="ReplacesPreviousSetup">True when the account already had a TOTP secret (active, disabled or
+    /// half-configured), so any old entry in the authenticator app no longer works.</param>
+    public sealed record Enrollment(string QrCodePng, string ManualKey, bool ReplacesPreviousSetup);
     /// <summary>Opaque device token and its expiration used for the trusted-device cookie.</summary>
     public sealed record TrustedDevice(string Token, DateTimeOffset ExpiresAt);
 
@@ -92,6 +94,18 @@ public static class TOTPService
 
     public static Enrollment BeginEnrollment(int userId, string username)
     {
+        // La fila se conserva al desactivar, así que su existencia indica una configuración anterior
+        bool replacesPreviousSetup;
+        try
+        {
+            replacesPreviousSetup = DataBaseService.ReadOne<int>(
+                "SELECT COUNT(*) FROM UserTOTP WHERE UserId = @UserId", UserArgs(userId)) > 0;
+        }
+        catch (InvalidOperationException)
+        {
+            replacesPreviousSetup = false;
+        }
+
         var secret = RandomNumberGenerator.GetBytes(20);
         var encodedSecret = Base32Encode(secret);
         var encryptedSecret = EncryptSecret(secret);
@@ -110,7 +124,7 @@ public static class TOTPService
         using var generator = new QRCodeGenerator();
         using var qrData = generator.CreateQrCode(uri, QRCodeGenerator.ECCLevel.Q);
         var qr = new PngByteQRCode(qrData);
-        return new Enrollment(Convert.ToBase64String(qr.GetGraphic(8)), encodedSecret);
+        return new Enrollment(Convert.ToBase64String(qr.GetGraphic(8)), encodedSecret, replacesPreviousSetup);
     }
 
     public static bool VerifyEnrollment(int userId, string code)

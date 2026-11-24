@@ -103,6 +103,34 @@ public static class JwtService
         DataBaseService.Execute(DeleteRefreshTokenQuery, new Dictionary<string, string> { { "@TokenHash", Hash(refreshToken) } });
     }
 
+    // Comprueba que el token de refresco existe, pertenece al usuario y no ha caducado (sin consumirlo)
+    public static bool IsRefreshTokenValid(int userId, string refreshToken)
+    {
+        try
+        {
+            var stored = DataBaseService.ReadOne(ReadRefreshTokenQuery,
+                new Dictionary<string, string> { { "@TokenHash", Hash(refreshToken) } },
+                r => (r.GetInt32(0), DateTime.ParseExact(r.GetString(1), DateFormat, CultureInfo.InvariantCulture)));
+            return stored.Item1 == userId && stored.Item2 >= DateTime.UtcNow;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    // Revoca solo el token de refresco de la sesión indicada y le entrega un par nuevo.
+    // Las demás sesiones del usuario no se ven afectadas. Devuelve null si el token no es de ese usuario.
+    public static AuthTokens? RotateRefreshToken(int userId, string refreshToken)
+    {
+        lock (RefreshLock)
+        {
+            if (!IsRefreshTokenValid(userId, refreshToken)) return null;
+            RevokeRefreshToken(refreshToken);
+            return IssueTokens(userId);
+        }
+    }
+
     public static void RevokeAllRefreshTokens(int userId)
     {
         DataBaseService.Execute(
