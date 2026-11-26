@@ -23,7 +23,9 @@ internal class Program
     /// <summary>Payload for completing a TOTP login challenge.</summary>
     public sealed record TotpLoginVerification(string ChallengeToken, string Code, bool TrustDevice);
     /// <summary>Payload containing a six-digit authenticator code.</summary>
-    public sealed record TotpCodeVerification(string Code);
+    public sealed record TotpCodeVerification(string Code, string RefreshToken);
+    /// <summary>New TOTP status plus the rotated tokens of the session that changed it.</summary>
+    public sealed record TotpSettingsChanged(bool Enabled, string AccessToken, string RefreshToken);
     /// <summary>Indicates whether TOTP is enabled for the current account.</summary>
     public sealed record TotpSettings(bool Enabled);
 
@@ -149,36 +151,51 @@ internal class Program
                 return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
             }
             var data = await request.Request.ReadBase64JsonAsync<TotpCodeVerification>();
-            if (data is null || string.IsNullOrWhiteSpace(data.Code)) return Results.BadRequest();
+            if (data is null || string.IsNullOrWhiteSpace(data.Code) || string.IsNullOrEmpty(data.RefreshToken))
+                return Results.BadRequest();
             var userId = request.GetUserId();
-            if (!TOTPService.VerifyEnrollment(userId, data.Code)) return Results.Unauthorized();
-            JwtService.RevokeAllRefreshTokens(userId);
-            return Results.Ok(new TotpSettings(true));
+            // La sesión debe seguir siendo válida antes de tocar nada
+            if (!JwtService.IsRefreshTokenValid(userId, data.RefreshToken)) return Results.Unauthorized();
+            // Código incorrecto: 422 y no 401, para que el cliente no lo confunda con un token caducado
+            if (!TOTPService.VerifyEnrollment(userId, data.Code)) return Results.UnprocessableEntity();
+            // Solo se rota el token de esta sesión; las demás no se cierran
+            var tokens = JwtService.RotateRefreshToken(userId, data.RefreshToken);
+            return tokens is null
+                ? Results.Unauthorized()
+                : Results.Ok(new TotpSettingsChanged(true, tokens.AccessToken, tokens.RefreshToken));
         })
             .WithName("VerifyTOTPEnrollment")
             .WithSummary("Confirm authenticator setup and enable TOTP")
-            .Produces<TotpSettings>(StatusCodes.Status200OK)
+            .Produces<TotpSettingsChanged>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status422UnprocessableEntity)
             .Produces(StatusCodes.Status426UpgradeRequired);
 
-        securedGroup.MapDelete("/totp", (HttpContext request) =>
+        securedGroup.MapDelete("/totp", async (HttpContext request) =>
         {
             if (!IsSecureAuthenticationRequest(request))
             {
                 return Results.StatusCode(StatusCodes.Status426UpgradeRequired);
             }
+            var data = await request.Request.ReadBase64JsonAsync<RefreshTokenDTO>();
+            if (data is null || string.IsNullOrEmpty(data.RefreshToken)) return Results.BadRequest();
             var userId = request.GetUserId();
+            if (!JwtService.IsRefreshTokenValid(userId, data.RefreshToken)) return Results.Unauthorized();
             TOTPService.Disable(userId);
             request.Response.Cookies.Delete(
                 TOTPService.TrustedCookieName,
                 CreateTrustedCookieOptions(request, DateTimeOffset.UtcNow));
-            JwtService.RevokeAllRefreshTokens(userId);
-            return Results.Ok(new TotpSettings(false));
+            // Solo se rota el token de esta sesión; las demás no se cierran
+            var tokens = JwtService.RotateRefreshToken(userId, data.RefreshToken);
+            return tokens is null
+                ? Results.Unauthorized()
+                : Results.Ok(new TotpSettingsChanged(false, tokens.AccessToken, tokens.RefreshToken));
         })
             .WithName("DisableTOTP")
             .WithSummary("Disable TOTP for the current user")
-            .Produces<TotpSettings>(StatusCodes.Status200OK)
+            .Produces<TotpSettingsChanged>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status401Unauthorized)
             .Produces(StatusCodes.Status426UpgradeRequired);
 
