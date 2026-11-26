@@ -24,6 +24,22 @@ public static class FileDataService
             FOREIGN KEY (UserId) REFERENCES Users(Id) ON DELETE CASCADE
         )";
     private const string FileKeysColumnsQuery = "SELECT name FROM pragma_table_info('FileKeys')";
+    private const string FileInfoColumnsQuery = "SELECT name FROM pragma_table_info('FileInfo')";
+
+    // Formato de almacenamiento: 1 = un único blob base64 (legado), 2 = trozos binarios cifrados por separado.
+    // Status: 'Pending' mientras se suben los trozos de un archivo nuevo (no aparece en los listados), 'Ready' después
+    public const int LegacyFormat = 1;
+    public const int ChunkedFormat = 2;
+    private static readonly (string Name, string Definition)[] FileInfoStorageColumns =
+    [
+        ("Format", "INTEGER NOT NULL DEFAULT 1"),
+        ("ChunkCount", "INTEGER NOT NULL DEFAULT 0"),
+        ("ChunkSize", "INTEGER NOT NULL DEFAULT 0"),
+        ("Status", "TEXT NOT NULL DEFAULT 'Ready'"),
+        // Id de la subida que generó el contenido actual. Va en los datos autenticados de cada trozo,
+        // así no se pueden mezclar trozos de dos versiones distintas del mismo archivo
+        ("ContentId", "INTEGER NOT NULL DEFAULT 0"),
+    ];
     private const string AddFileKeysUserIdQuery = "ALTER TABLE FileKeys ADD COLUMN UserId INTEGER NOT NULL DEFAULT 0";
     private const string CreateFileKeysUserIndexQuery = "CREATE INDEX IF NOT EXISTS IX_FileKeys_UserId ON FileKeys (UserId)";
     private const string CreateFileKeysIndexQuery = "CREATE INDEX IF NOT EXISTS IX_FileKeys_FileId ON FileKeys (FileId)";
@@ -33,13 +49,17 @@ public static class FileDataService
     private const string DeleteFileQuery = "DELETE FROM FileInfo WHERE Id = @Id AND OwnerId = @OwnerId";
     private const string UpdateFileQuery = "UPDATE FileInfo SET Name = @Name, Path = @Path, Size = @Size, CreatedAt = @CreatedAt, ModifiedAt = @ModifiedAt, FileType = @FileType WHERE Id = @Id AND OwnerId = @OwnerId";
     private const string CreateFileQuery = "INSERT INTO FileInfo (OwnerId, Name, Path, Size, CreatedAt, ModifiedAt, FileType) VALUES (@OwnerId, @Name, @Path, @Size, @CreatedAt, @ModifiedAt, @FileType)";
+    private const string CreatePendingFileQuery = "INSERT INTO FileInfo (OwnerId, Name, Path, Size, CreatedAt, ModifiedAt, FileType, Format, ChunkCount, ChunkSize, Status) VALUES (@OwnerId, @Name, @Path, @Size, @CreatedAt, @ModifiedAt, @FileType, 2, 0, 0, 'Pending')";
+    private const string ReadStorageQuery = "SELECT Id, OwnerId, Format, ChunkCount, ChunkSize, Size, Status, FileType, ContentId FROM FileInfo WHERE Id = @Id";
+    private const string SetStorageQuery = "UPDATE FileInfo SET Format = 2, ChunkCount = @ChunkCount, ChunkSize = @ChunkSize, Size = @Size, ModifiedAt = @ModifiedAt, Status = 'Ready', ContentId = @ContentId WHERE Id = @Id AND OwnerId = @OwnerId";
+    private const string DeletePendingFileQuery = "DELETE FROM FileInfo WHERE Id = @Id AND Status = 'Pending'";
     private const string LastInsertIdQuery = "SELECT last_insert_rowid()";
 
     private const string ReadUsersDataQuery = "SELECT u.Id, u.Username, u.PublicKey FROM FileKeys k JOIN Users u ON u.Id = k.UserId WHERE k.FileId = @FileId ORDER BY k.Id";
     private const string ReadUserKeyQuery = "SELECT PrivateKey FROM FileKeys WHERE FileId = @FileId AND UserId = @UserId";
     private const string ReadUserKeysQuery = "SELECT PrivateKey as Key, UserId FROM FileKeys WHERE FileId = @FileId";
     private const string ReadOwnerQuery = "SELECT OwnerId FROM FileInfo WHERE Id = @Id";
-    private const string ListSharedQuery = "SELECT f.Id, f.Name, f.Path, f.Size, f.CreatedAt, f.ModifiedAt, f.FileType FROM FileInfo f JOIN FileKeys k ON k.FileId = f.Id WHERE k.UserId = @UserId AND f.OwnerId != @UserId ORDER BY f.Name";
+    private const string ListSharedQuery = "SELECT f.Id, f.Name, f.Path, f.Size, f.CreatedAt, f.ModifiedAt, f.FileType FROM FileInfo f JOIN FileKeys k ON k.FileId = f.Id WHERE k.UserId = @UserId AND f.OwnerId != @UserId AND f.Status = 'Ready' ORDER BY f.Name";
     private const string DeleteKeysQuery = "DELETE FROM FileKeys WHERE FileId = @FileId";
     private const string CreateKeyQuery = "INSERT INTO FileKeys (FileId, UserId, PrivateKey) VALUES (@FileId, @UserId, @PrivateKey)";
 
@@ -47,7 +67,7 @@ public static class FileDataService
 
     private const string SubtreeCondition = "(Path = @Path OR substr(Path, 1, length(@Path) + 1) = @Path || '/')";
 
-    private const string ListPathQuery = "SELECT Id, Name, Path, Size, CreatedAt, ModifiedAt, FileType FROM FileInfo WHERE OwnerId = @OwnerId AND Path = @Path ORDER BY Name";
+    private const string ListPathQuery = "SELECT Id, Name, Path, Size, CreatedAt, ModifiedAt, FileType FROM FileInfo WHERE OwnerId = @OwnerId AND Path = @Path AND Status = 'Ready' ORDER BY Name";
     private const string FolderExistsQuery = "SELECT COUNT(1) FROM FileInfo WHERE OwnerId = @OwnerId AND Path = @Path AND Name = @Name AND FileType = 'Directory'";
     private const string SubtreeFileIdsQuery = "SELECT Id FROM FileInfo WHERE OwnerId = @OwnerId AND FileType = 'File' AND " + SubtreeCondition;
     private const string DeleteSubtreeQuery = "DELETE FROM FileInfo WHERE OwnerId = @OwnerId AND " + SubtreeCondition;
@@ -159,6 +179,14 @@ public static class FileDataService
         {
             DataBaseService.Execute(AddFileKeysUserIdQuery, noArgs);
         }
+        var fileInfoColumns = DataBaseService.ReadMany<string>(FileInfoColumnsQuery, noArgs).ToHashSet();
+        foreach (var (name, definition) in FileInfoStorageColumns)
+        {
+            if (!fileInfoColumns.Contains(name))
+            {
+                DataBaseService.Execute($"ALTER TABLE FileInfo ADD COLUMN {name} {definition}", noArgs);
+            }
+        }
         DataBaseService.Execute(CreateFileKeysIndexQuery, noArgs);
         DataBaseService.Execute(CreateFileKeysUserIndexQuery, noArgs);
         DataBaseService.Execute(CreateFileInfoOwnerIndexQuery, noArgs);
@@ -180,6 +208,69 @@ public static class FileDataService
         return ok ? fileId : -1;
     }
 
+
+    // Crea la entrada de un archivo cuyo contenido aún se está subiendo. Reserva el nombre en la carpeta,
+    // pero no aparece en los listados hasta que FinishChunkedStorage lo marque como 'Ready'
+    public static int CreatePendingFileInfo(int userId, FileInfo fileInfo, UserFileKey[] keys)
+    {
+        var args = BuildFileArgs(userId, fileInfo);
+        int fileId = -1;
+
+        bool ok = RunInTransaction(() =>
+        {
+            DataBaseService.Execute(CreatePendingFileQuery, args);
+            fileId = DataBaseService.ReadOne<int>(LastInsertIdQuery, []);
+            ReplaceKeys(fileId, keys);
+        });
+
+        return ok ? fileId : -1;
+    }
+
+    public static FileStorageInfo? GetStorageInfo(int fileId)
+    {
+        try
+        {
+            return DataBaseService.ReadOne(ReadStorageQuery, new Dictionary<string, string> { { "@Id", fileId.ToString() } },
+                r => new FileStorageInfo(
+                    r.GetInt32(0), r.GetInt32(1), r.GetInt32(2), r.GetInt32(3), r.GetInt32(4), r.GetInt64(5),
+                    r.GetString(6), Enum.Parse<FileType>(r.GetString(7)), r.GetInt32(8)));
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    // Marca el contenido como subido por trozos y, si se pasan, reemplaza las claves en la misma transacción
+    // (así una regeneración de clave nunca deja el contenido nuevo con las claves antiguas)
+    public static bool FinishChunkedStorage(int userId, int fileId, int contentId, int chunkCount, int chunkSize, long size, UserFileKey[]? keys, Action? insideTransaction = null)
+    {
+        var args = new Dictionary<string, string>
+        {
+            { "@Id", fileId.ToString() },
+            { "@OwnerId", userId.ToString() },
+            { "@ContentId", contentId.ToString() },
+            { "@ChunkCount", chunkCount.ToString() },
+            { "@ChunkSize", chunkSize.ToString() },
+            { "@Size", size.ToString() },
+            { "@ModifiedAt", DateTime.Now.ToString(DateFormat) }
+        };
+
+        return RunInTransaction(() =>
+        {
+            if (DataBaseService.ExecuteNonQuery(SetStorageQuery, args) != 1)
+            {
+                throw new InvalidOperationException("File not found");
+            }
+            if (keys is not null) ReplaceKeys(fileId, keys);
+            insideTransaction?.Invoke();
+        });
+    }
+
+    public static void DeletePendingFileInfo(int fileId)
+    {
+        DataBaseService.Execute(DeletePendingFileQuery, new Dictionary<string, string> { { "@Id", fileId.ToString() } });
+    }
 
     public static FileInfo? GetFileById(int userId, int fileId)
     {
@@ -309,21 +400,53 @@ public static class FileDataService
         );
     }
 
-    // Las claves y el FileInfo deben guardarse juntos o no guardarse
-    private static bool RunInTransaction(Action action)
+    // Profundidad de transacciones anidadas. Solo se toca con DataBaseService.Lock tomado
+    private static int _transactionDepth;
+
+    // Las claves y el FileInfo deben guardarse juntos o no guardarse.
+    // Si ya hay una transacción abierta (en este hilo, pues se tiene el lock), la acción se une a ella y los
+    // errores se propagan para que la transacción externa haga el ROLLBACK completo
+    public static bool RunInTransaction(Action action)
     {
         var noArgs = new Dictionary<string, string>();
-        try
+        // Se mantiene el lock durante toda la transacción para que otra petición no meta sus sentencias en ella
+        lock (DataBaseService.Lock)
         {
-            DataBaseService.Execute("BEGIN", noArgs);
-            action();
-            DataBaseService.Execute("COMMIT", noArgs);
-            return true;
-        }
-        catch (Exception)
-        {
-            try { DataBaseService.Execute("ROLLBACK", noArgs); } catch (Exception) { }
-            return false;
+            if (_transactionDepth > 0)
+            {
+                _transactionDepth++;
+                try { action(); }
+                finally { _transactionDepth--; }
+                return true;
+            }
+
+            try
+            {
+                DataBaseService.Execute("BEGIN", noArgs);
+                _transactionDepth = 1;
+                action();
+                _transactionDepth = 0;
+                DataBaseService.Execute("COMMIT", noArgs);
+                return true;
+            }
+            catch (Exception)
+            {
+                _transactionDepth = 0;
+                try { DataBaseService.Execute("ROLLBACK", noArgs); } catch (Exception) { }
+                return false;
+            }
         }
     }
+
+    public static T RunInTransactionWithResult<T>(Func<T> action)
+    {
+        T result = default!;
+        if (!RunInTransaction(() => result = action()))
+        {
+            throw new InvalidOperationException("Transaction failed");
+        }
+        return result;
+    }
 }
+
+public record FileStorageInfo(int Id, int OwnerId, int Format, int ChunkCount, int ChunkSize, long Size, string Status, FileType FileType, int ContentId);

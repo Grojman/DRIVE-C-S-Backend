@@ -6,6 +6,11 @@ public static class DataBaseService
     public const string ConnectionString = "Data Source=Data/database.db";
     private static SqliteConnection _connection = null!;
 
+    // La conexión es compartida y SqliteConnection no es thread-safe: con las subidas por trozos llegan
+    // varias peticiones a la vez, así que todo acceso (y las transacciones completas) pasa por este lock.
+    // Monitor es reentrante, por lo que una transacción puede volver a pedirlo desde el mismo hilo.
+    public static readonly object Lock = new();
+
     public static void Start()
     {
         Directory.CreateDirectory("Data");
@@ -21,79 +26,50 @@ public static class DataBaseService
 
     public static void Stop()
     {
-        _connection.Close();
+        lock (Lock) _connection.Close();
     }
 
+    // Se materializa la lista dentro del lock: un iterador perezoso ejecutaría la consulta fuera de él
     public static IEnumerable<T> ReadMany<T>(string query, Dictionary<string, string> args)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = query;
-        foreach(var arg in args)
-        {
-            command.Parameters.AddWithValue(arg.Key, arg.Value);
-        }
-
-        using var reader = command.ExecuteReader();
-
-        while(reader.Read())
-        {
-            yield return (T)Convert.ChangeType(reader[0], typeof(T));
-        }
+        return ReadMany(query, args, reader => (T)Convert.ChangeType(reader[0], typeof(T)));
     }
 
     public static IEnumerable<T> ReadMany<T>(string query, Dictionary<string, string> args, Func<SqliteDataReader, T> map)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = query;
-        foreach(var arg in args)
+        lock (Lock)
         {
-            command.Parameters.AddWithValue(arg.Key, arg.Value);
-        }
+            using var command = CreateCommand(query, args);
+            using var reader = command.ExecuteReader();
 
-        using var reader = command.ExecuteReader();
-
-        while(reader.Read())
-        {
-            yield return map(reader);
+            var result = new List<T>();
+            while (reader.Read())
+            {
+                result.Add(map(reader));
+            }
+            return result;
         }
     }
 
     public static T ReadOne<T>(string query, Dictionary<string, string> args, Func<SqliteDataReader, T> map)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = query;
-        foreach(var arg in args)
+        lock (Lock)
         {
-            command.Parameters.AddWithValue(arg.Key, arg.Value);
+            using var command = CreateCommand(query, args);
+            using var reader = command.ExecuteReader();
+
+            if (reader.Read())
+            {
+                return map(reader);
+            }
+
+            throw new InvalidOperationException("No result found");
         }
-
-        using var reader = command.ExecuteReader();
-
-        if(reader.Read())
-        {
-            return map(reader);
-        }
-
-        throw new InvalidOperationException("No result found");
     }
 
     public static T ReadOne<T>(string query, Dictionary<string, string> args)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = query;
-        foreach(var arg in args)
-        {
-            command.Parameters.AddWithValue(arg.Key, arg.Value);
-        }
-
-        using var reader = command.ExecuteReader();
-
-        if(reader.Read())
-        {
-            return (T)Convert.ChangeType(reader[0], typeof(T));
-        }
-
-        throw new InvalidOperationException("No result found");
+        return ReadOne(query, args, reader => (T)Convert.ChangeType(reader[0], typeof(T)));
     }
 
     public static void Execute(string query, Dictionary<string, string> args)
@@ -103,20 +79,29 @@ public static class DataBaseService
 
     public static int ExecuteNonQuery(string query, Dictionary<string, string> args)
     {
-        using var command = _connection.CreateCommand();
+        lock (Lock)
+        {
+            using var command = CreateCommand(query, args);
+            return command.ExecuteNonQuery();
+        }
+    }
+
+    private static SqliteCommand CreateCommand(string query, Dictionary<string, string> args)
+    {
+        var command = _connection.CreateCommand();
         command.CommandText = query;
-        foreach(var arg in args)
+        foreach (var arg in args)
         {
             command.Parameters.AddWithValue(arg.Key, arg.Value);
         }
-
-        return command.ExecuteNonQuery();
+        return command;
     }
 
     public static void CheckDatabase()
     {
         UserService.CreateTable();
         FileDataService.CreateTables();
+        UploadService.CreateTables();
         JwtService.CreateTable();
     }
 }

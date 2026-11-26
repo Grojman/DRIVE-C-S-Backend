@@ -1,1 +1,0 @@
-public record NewFileDTO(FileTransfer data, string FileName, string FilePath, long Size);

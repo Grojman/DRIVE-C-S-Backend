@@ -36,6 +36,7 @@ internal class Program
         DataBaseService.Start();
         TOTPService.CreateTables();
         FileSystemService.Start();
+        UploadService.CleanupStale();
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = null; // tamaño de envío ilimitado
@@ -498,64 +499,115 @@ internal class Program
 
         // TODO: THE SERVICE SHOULD GET THE TRUE USER ID IN ORDER TO CREATE FILES UNDER IT
 
-        //  - "/file" GET: userId, Ruta (EL ARCHIVO)
-        securedGroup.MapGet("/file", async(HttpContext request) =>
+        //  - "/file" GET: manifiesto del archivo (clave del usuario y cómo descargar el contenido).
+        //    Formato 1 (legado): el contenido va en FileData. Formato 2: se pide cada trozo con GET /file/chunk
+        securedGroup.MapGet("/file", (HttpContext request) =>
         {
             var userId = request.GetUserId();
-            var fileId = request.Request.Query["FileId"].ToString();
-
-            
             if (int.TryParse(request.Request.ReadBase64Query("FileId"), out int id))
             {
-                
                 var file = FileService.GetFile(userId, id);
-
                 if (file is not null)
                 {
                     return Results.Ok(file);
                 }
             }
             return Results.NotFound("File not found");
-        });
+        })
+            .WithName("GetFileManifest")
+            .Produces<FileManifest>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
 
-        securedGroup.MapPost("/file", async(HttpContext request) =>
+        //  - "/file/chunk" GET: FileId, Index -> bytes cifrados del trozo (application/octet-stream)
+        securedGroup.MapGet("/file/chunk", (HttpContext request) =>
         {
             var userId = request.GetUserId();
-            var info = await request.Request.ReadBase64JsonAsync<NewFileDTO>();
-            if (info is not null)
+            if (int.TryParse(request.Request.ReadBase64Query("FileId"), out int id) &&
+                int.TryParse(request.Request.ReadBase64Query("Index"), out int index))
             {
-                var folderInfo = new FileInfo(-1, info.FileName, info.FilePath, info.Size, info.data.UsersData ?? [], DateTime.Now, DateTime.Now, FileType.File);
-                if (FileService.CreateFile(userId, folderInfo, info.data.FileData, info.data.Keys))
+                var path = FileService.GetChunkPath(userId, id, index);
+                if (path is not null)
                 {
-                    return Results.Ok("File created successfully");
+                    return Results.File(path, "application/octet-stream");
                 }
             }
-            return Results.BadRequest("Error creating file");
-        });
+            return Results.NotFound("Chunk not found");
+        })
+            .WithName("GetFileChunk")
+            .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream")
+            .Produces(StatusCodes.Status404NotFound);
 
-        securedGroup.MapPut("/file", async(HttpContext request) =>
+        //  - "/file/upload" POST: abre una subida por trozos (archivo nuevo, o reemplazo si se indica FileId)
+        securedGroup.MapPost("/file/upload", async (HttpContext request) =>
         {
             var userId = request.GetUserId();
-            var transferInfo = await request.Request.ReadBase64JsonAsync<NewFileDTO>();
+            var data = await request.Request.ReadBase64JsonAsync<ChunkedUploadInitDTO>();
+            if (data is null) return Results.BadRequest();
 
-            if(transferInfo is not null)
+            var (result, session) = data.FileId is int fileId && fileId > 0
+                ? UploadService.InitReplace(userId, fileId, data.Size, data.ChunkSize, data.ChunkCount)
+                : UploadService.InitNew(userId, data.FileName ?? "", data.FilePath ?? "", data.Size, data.ChunkSize, data.ChunkCount, data.Keys ?? []);
+
+            return session is not null
+                ? Results.Ok(new ChunkedUploadSessionDTO(session.Id, session.FileId, UploadService.MaxChunkSize))
+                : UploadResult(result);
+        })
+            .WithName("BeginChunkedUpload")
+            .Produces<ChunkedUploadSessionDTO>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
+
+        //  - "/file/upload/chunk" PUT: UploadId, Index + cuerpo binario (el trozo ya comprimido y cifrado).
+        //    Reenviar el mismo índice lo sobrescribe, así el cliente puede reintentar sin más
+        securedGroup.MapPut("/file/upload/chunk", async (HttpContext request) =>
+        {
+            var userId = request.GetUserId();
+            if (!int.TryParse(request.Request.ReadBase64Query("UploadId"), out int uploadId) ||
+                !int.TryParse(request.Request.ReadBase64Query("Index"), out int index))
             {
-                var fileInfo = FileDataService.GetFileById(userId, transferInfo.data.Id);
-                if(fileInfo is not null)
-                {
-                    var newinfo = fileInfo with { 
-                        Name = transferInfo.FileName,
-                        Path = transferInfo.FilePath,
-                        Size = transferInfo.Size,
-                        ModifiedAt = DateTime.Now};
-                    if (FileService.UpdateFile(userId,newinfo, transferInfo.data.FileData))
-                    {
-                        return Results.Ok("File updated successfully");
-                    }
-                }
+                return Results.BadRequest();
             }
-            return Results.BadRequest("Error updating file");
-        });
+
+            var result = await UploadService.WriteChunk(userId, uploadId, index, request.Request, request.RequestAborted);
+            return result == UploadService.Result.Ok ? Results.Ok(true) : UploadResult(result);
+        })
+            .WithName("UploadChunk")
+            .Accepts<byte[]>("application/octet-stream")
+            .Produces<bool>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status413PayloadTooLarge);
+
+        //  - "/file/upload/complete" POST: UploadId (+ Keys opcional). Si faltan trozos devuelve 409 con su lista
+        securedGroup.MapPost("/file/upload/complete", async (HttpContext request) =>
+        {
+            var userId = request.GetUserId();
+            var data = await request.Request.ReadBase64JsonAsync<ChunkedUploadCompleteDTO>();
+            if (data is null) return Results.BadRequest();
+
+            var (result, missing) = UploadService.Complete(userId, data.UploadId, data.Keys);
+            if (result == UploadService.Result.Ok) return Results.Ok(true);
+            if (missing.Length > 0) return Results.Conflict(new ChunkedUploadMissingDTO(missing));
+            return UploadResult(result);
+        })
+            .WithName("CompleteChunkedUpload")
+            .Produces<bool>(StatusCodes.Status200OK)
+            .Produces<ChunkedUploadMissingDTO>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
+
+        //  - "/file/upload" DELETE: UploadId -> descarta la subida (y la reserva del nombre si era nuevo)
+        securedGroup.MapDelete("/file/upload", async (HttpContext request) =>
+        {
+            var data = await request.Request.ReadBase64JsonAsync<ChunkedUploadAbortDTO>();
+            if (data is null) return Results.BadRequest();
+            var result = UploadService.Abort(request.GetUserId(), data.UploadId);
+            return result == UploadService.Result.Ok ? Results.Ok(true) : UploadResult(result);
+        })
+            .WithName("AbortChunkedUpload")
+            .Produces<bool>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
 
         securedGroup.MapPut("/file/data", async(HttpContext request) => {
             var userId = request.GetUserId();
@@ -609,7 +661,7 @@ internal class Program
             if (info is not null)
             {
                 var folderInfo = new FileInfo(-1, info.FolderName, info.FolderPath, 0, [], DateTime.Now, DateTime.Now, FileType.Directory);
-                if (FileService.CreateFile(userId, folderInfo, string.Empty))
+                if (UploadService.ValidName(info.FolderName) && FileService.CreateFolder(userId, folderInfo))
                 {
                     return Results.Ok("Folder created successfully");
                 }
@@ -640,10 +692,10 @@ internal class Program
             if (data is not null)
             {
                 var currentInfo = FileDataService.GetFileById(userId, data.FolderId);
-                if (currentInfo is not null)
+                if (currentInfo is not null && UploadService.ValidName(data.NewName))
                 {
                     var updatedInfo = currentInfo with { Name = data.NewName };
-                    if (FileService.UpdateFile(userId, updatedInfo, string.Empty))
+                    if (FileService.UpdateFolder(userId, updatedInfo))
                     {
                         return Results.Ok("Folder renamed successfully");
                     }
@@ -655,6 +707,15 @@ internal class Program
 
         app.Run();
     }
+
+    private static IResult UploadResult(UploadService.Result result) => result switch
+    {
+        UploadService.Result.Ok => Results.Ok(true),
+        UploadService.Result.NotFound => Results.NotFound(),
+        UploadService.Result.Conflict => Results.Conflict(),
+        UploadService.Result.TooLarge => Results.StatusCode(StatusCodes.Status413PayloadTooLarge),
+        _ => Results.BadRequest(),
+    };
 
     private static LoggedInUser ToLoggedInUser(UserService.UserDB user, AuthTokens tokens) =>
         new(
